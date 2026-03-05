@@ -236,6 +236,16 @@ def _parse_cli_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _print_cli_flag_snapshot(args: argparse.Namespace):
+    """Print all parsed CLI flags in a stable order for startup observability."""
+    print("[CLI_FLAGS] begin")
+    for key in sorted(vars(args).keys()):
+        value = getattr(args, key)
+        rendered = "<unset>" if value is None else value
+        print(f"[CLI_FLAGS] --{key.replace('_', '-')}={rendered}")
+    print("[CLI_FLAGS] end")
+
+
 def _parse_bool(value: str, default: bool) -> bool:
     if value is None:
         return default
@@ -255,6 +265,7 @@ def _float_from_env_or_cli(cli_value: Optional[float], env_key: str, default: fl
 
 
 CLI_ARGS = _parse_cli_args()
+_print_cli_flag_snapshot(CLI_ARGS)
 RUN_MODE = (CLI_ARGS.run_mode or os.getenv("RUN_MODE", "record")).lower()  # "record" or "replay"
 SCENARIO_MODE = (CLI_ARGS.scenario or os.getenv("SCENARIO_MODE", "advice_guided")).lower()
 if SCENARIO_MODE not in SCENARIO_CHOICES:

@@ -27,6 +27,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -151,6 +152,10 @@ def _extract_events_path(stdout: str) -> Optional[str]:
     return None
 
 
+def _format_cmd(cmd: List[str]) -> str:
+    return " ".join(shlex.quote(str(item)) for item in cmd)
+
+
 def run_experiment_case(
     case_cfg: Dict[str, Any],
     *,
@@ -214,6 +219,7 @@ def run_experiment_case(
 
     messaging_enabled = bool(case_cfg.get("messaging_enabled", True))
     cmd.extend(["--messaging", "on" if messaging_enabled else "off"])
+    print(f"[SIM_CLI] case_id={case_id} {_format_cmd(cmd[2:])}")
 
     env = os.environ.copy()
     env.update({
