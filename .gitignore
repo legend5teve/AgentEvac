@@ -1,0 +1,14 @@
+2022_Roadnetwork_Lytton/
+Buildings/
+fire/
+lytton.net.xml
+outputs/
+__pycache__/
+Repaired.netecfg
+Repaired.rou.xml
+Repaired.sumocfg
+Simu0.rou.xml
+Traci.sumocfg
+venv/
+Wildfire_Proposal.pdf
+.idea/
