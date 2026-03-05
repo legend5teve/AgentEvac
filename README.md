@@ -2,7 +2,22 @@
 
 ![banner](static/agent-evac-logo.png)
 
+[![CI](https://github.com/denoslab/AgentEvac/actions/workflows/ci.yml/badge.svg)](https://github.com/denoslab/AgentEvac/actions/workflows/ci.yml)
+[![Docker](https://github.com/denoslab/AgentEvac/actions/workflows/docker.yml/badge.svg)](https://github.com/denoslab/AgentEvac/actions/workflows/docker.yml)
+[![PyPI](https://img.shields.io/pypi/v/agentevac)](https://pypi.org/project/agentevac/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://denoslab.github.io/AgentEvac/)
+[![License](https://img.shields.io/github/license/denoslab/AgentEvac)](LICENSE)
+
+📖 **[Full API documentation](https://denoslab.github.io/AgentEvac/)**
+
 An agentic simulator for wildfire evacuations that couples SUMO traffic simulation with LLM-driven agents. Agents follow the Protective Action Decision Model (PADM), maintaining probabilistic beliefs about hazard states and making real-time departure, routing, and destination decisions under uncertainty.
+
+## TL;DR
+
+```bash
+pip install agentevac
+```
 
 ## Background
 
@@ -17,10 +32,15 @@ Wildfire evacuations in the wildland-urban interface (WUI) are high-risk and tim
 
 ## Quickstart
 
-**Requirements:** Python 3.9+, [SUMO](https://sumo.dlr.de/docs/Installing/index.html), OpenAI API key.
+**Requirements:** Python 3.11+, [SUMO](https://sumo.dlr.de/docs/Installing/index.html), OpenAI API key.
 
 ```bash
-# Install the package and its dependencies
+# Install from PyPI
+pip install agentevac
+
+# Or install in development mode from source
+git clone https://github.com/denoslab/AgentEvac.git
+cd AgentEvac
 pip install -e .
 
 # Set required environment variables
