@@ -134,11 +134,13 @@ class RouteReplay:
                     continue
                 rec = json.loads(line)
                 event = rec.get("event", "route_change")
-                step = int(rec["step"])
-                vid = rec["veh_id"]
                 if event == "route_change":
+                    step = int(rec["step"])
+                    vid = rec["veh_id"]
                     route_schedule.setdefault(step, {})[vid] = rec
                 elif event == "departure_release":
+                    step = int(rec["step"])
+                    vid = rec["veh_id"]
                     departure_schedule.setdefault(step, {})[vid] = rec
         return route_schedule, departure_schedule
 
