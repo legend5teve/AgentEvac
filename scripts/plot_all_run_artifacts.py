@@ -10,18 +10,21 @@ from pathlib import Path
 try:
     from scripts._plot_common import newest_file
     from scripts.plot_agent_communication import plot_agent_communication
+    from scripts.plot_agent_round_timeline import plot_agent_round_timeline
     from scripts.plot_departure_timeline import plot_timeline
     from scripts.plot_experiment_comparison import load_cases, plot_experiment_comparison
     from scripts.plot_run_metrics import plot_metrics_dashboard
 except ModuleNotFoundError:
     from _plot_common import newest_file
     from plot_agent_communication import plot_agent_communication
+    from plot_agent_round_timeline import plot_agent_round_timeline
     from plot_departure_timeline import plot_timeline
     from plot_experiment_comparison import load_cases, plot_experiment_comparison
     from plot_run_metrics import plot_metrics_dashboard
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the aggregate plotting wrapper."""
     parser = argparse.ArgumentParser(
         description="Generate the standard dashboard, timeline, comparison, and communication plots for one run."
     )
@@ -45,6 +48,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _maybe_path(path_arg: str | None) -> Path | None:
+    """Validate an optional explicit file path and return it as a `Path`."""
     if not path_arg:
         return None
     path = Path(path_arg)
@@ -54,6 +58,7 @@ def _maybe_path(path_arg: str | None) -> Path | None:
 
 
 def _resolve_run_id(args: argparse.Namespace) -> str:
+    """Resolve the run ID from CLI args or the newest events file."""
     if args.run_id:
         return str(args.run_id)
     for path_arg in (args.events, args.metrics, args.replay, args.dialogs):
@@ -67,6 +72,7 @@ def _resolve_run_id(args: argparse.Namespace) -> str:
 
 
 def _resolve_paths(args: argparse.Namespace, run_id: str) -> dict[str, Path | None]:
+    """Resolve all input artifact paths for one run."""
     metrics = _maybe_path(args.metrics)
     events = _maybe_path(args.events)
     replay = _maybe_path(args.replay)
@@ -94,6 +100,7 @@ def _resolve_paths(args: argparse.Namespace, run_id: str) -> dict[str, Path | No
 
 
 def main() -> None:
+    """CLI entry point for generating the standard set of run figures."""
     args = _parse_args()
     run_id = _resolve_run_id(args)
     paths = _resolve_paths(args, run_id)
@@ -129,6 +136,15 @@ def main() -> None:
         show=args.show,
         top_n=args.top_n,
     )
+    if replay_path is not None:
+        plot_agent_round_timeline(
+            events_path=events_path,
+            replay_path=replay_path,
+            metrics_path=metrics_path,
+            out_path=out_dir / "agent_round_timeline.png",
+            show=args.show,
+            include_no_departure=False,
+        )
     comparison_source: Path | None = None
     if args.results_json:
         results_path = Path(args.results_json)
