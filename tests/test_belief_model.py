@@ -8,6 +8,7 @@ from agentevac.agents.belief_model import (
     bucket_uncertainty,
     categorize_hazard_state,
     compute_belief_entropy,
+    compute_signal_conflict,
     fuse_env_and_social_beliefs,
     normalize_entropy,
     smooth_belief,
@@ -209,3 +210,56 @@ class TestUpdateAgentBelief:
             self._prev_belief(), self._safe_env(), self._no_messages(), theta_trust=0.5
         )
         assert result["uncertainty_bucket"] in ("Low", "Medium", "High")
+
+    def test_signal_conflict_present_in_result(self):
+        result = update_agent_belief(
+            self._prev_belief(), self._safe_env(), self._no_messages(), theta_trust=0.5
+        )
+        assert "signal_conflict" in result
+
+    def test_no_messages_gives_zero_conflict(self):
+        result = update_agent_belief(
+            self._prev_belief(), self._safe_env(), self._no_messages(), theta_trust=0.5
+        )
+        assert result["signal_conflict"] == pytest.approx(0.0)
+
+    def test_conflicting_sources_give_high_conflict(self):
+        # env says safe (margin 900m), social says danger
+        result = update_agent_belief(
+            self._prev_belief(), self._safe_env(), self._danger_messages(), theta_trust=0.5
+        )
+        assert result["signal_conflict"] > 0.3
+
+
+class TestComputeSignalConflict:
+    def test_identical_beliefs_give_zero(self):
+        b = {"p_safe": 0.8, "p_risky": 0.15, "p_danger": 0.05}
+        assert compute_signal_conflict(b, b) == pytest.approx(0.0, abs=1e-6)
+
+    def test_maximally_opposed_gives_near_one(self):
+        env = {"p_safe": 0.98, "p_risky": 0.01, "p_danger": 0.01}
+        soc = {"p_safe": 0.01, "p_risky": 0.01, "p_danger": 0.98}
+        assert compute_signal_conflict(env, soc) > 0.85
+
+    def test_moderate_disagreement(self):
+        env = {"p_safe": 0.75, "p_risky": 0.20, "p_danger": 0.05}
+        soc = {"p_safe": 0.10, "p_risky": 0.30, "p_danger": 0.60}
+        conflict = compute_signal_conflict(env, soc)
+        assert 0.2 < conflict < 0.7
+
+    def test_symmetry(self):
+        env = {"p_safe": 0.9, "p_risky": 0.05, "p_danger": 0.05}
+        soc = {"p_safe": 0.1, "p_risky": 0.1, "p_danger": 0.8}
+        assert compute_signal_conflict(env, soc) == pytest.approx(
+            compute_signal_conflict(soc, env), abs=1e-9
+        )
+
+    def test_result_bounded_zero_to_one(self):
+        for env, soc in [
+            ({"p_safe": 1.0, "p_risky": 0.0, "p_danger": 0.0},
+             {"p_safe": 0.0, "p_risky": 0.0, "p_danger": 1.0}),
+            ({"p_safe": 0.5, "p_risky": 0.3, "p_danger": 0.2},
+             {"p_safe": 0.5, "p_risky": 0.3, "p_danger": 0.2}),
+        ]:
+            c = compute_signal_conflict(env, soc)
+            assert 0.0 <= c <= 1.0

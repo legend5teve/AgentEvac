@@ -224,6 +224,45 @@ def bucket_uncertainty(entropy_norm: float) -> str:
     return "High"
 
 
+def compute_signal_conflict(
+    env_belief: Dict[str, float],
+    social_belief: Dict[str, float],
+) -> float:
+    """Measure disagreement between env and social beliefs via Jensen-Shannon divergence.
+
+    JSD is symmetric, bounded [0, ln 2], and information-theoretic — consistent with
+    the entropy framework used elsewhere in this module.  The raw JSD is normalized
+    by ln(2) so the return value lies in [0, 1]:
+
+        0 = sources perfectly agree
+        1 = sources maximally disagree (e.g., one says safe, the other says danger)
+
+    This score is recorded for post-hoc RQ1 analysis and surfaced in the LLM prompt
+    so the agent can reason about contradictions between its own observation and
+    neighbor messages.
+
+    Args:
+        env_belief: Belief derived from the agent's own hazard observation.
+        social_belief: Belief inferred from neighbor inbox messages.
+
+    Returns:
+        Normalized JSD ∈ [0, 1].
+    """
+    keys = ("p_safe", "p_risky", "p_danger")
+    env = _normalize_triplet(env_belief)
+    soc = _normalize_triplet(social_belief)
+    m = {k: 0.5 * env[k] + 0.5 * soc[k] for k in keys}
+
+    def _kl(p: Dict[str, float], q: Dict[str, float]) -> float:
+        return sum(
+            max(1e-12, p[k]) * math.log(max(1e-12, p[k]) / max(1e-12, q[k]))
+            for k in keys
+        )
+
+    jsd = 0.5 * _kl(env, m) + 0.5 * _kl(soc, m)
+    return _clamp(jsd / math.log(2), 0.0, 1.0)
+
+
 def update_agent_belief(
     prev_belief: Dict[str, float],
     env_signal: Dict[str, Any],
@@ -252,6 +291,7 @@ def update_agent_belief(
             - p_safe, p_risky, p_danger    : smoothed posterior probabilities
             - entropy, entropy_norm        : Shannon entropy (raw and normalized)
             - uncertainty_bucket           : "Low", "Medium", or "High"
+            - signal_conflict              : JSD between env and social beliefs [0, 1]
             - env_weight, social_weight    : fusion weights applied this round
             - env_belief, social_belief    : component beliefs before fusion
     """
@@ -264,12 +304,14 @@ def update_agent_belief(
         fused = fuse_env_and_social_beliefs(env_belief, social_belief, theta_trust)
         social_weight = _clamp(theta_trust, 0.0, 1.0)
         env_weight = 1.0 - social_weight
+        conflict = compute_signal_conflict(env_belief, social_belief)
     else:
         # No messages in inbox: rely entirely on own environmental observation.
         social_belief = {"p_safe": 1.0 / 3.0, "p_risky": 1.0 / 3.0, "p_danger": 1.0 / 3.0}
         fused = dict(env_belief)
         social_weight = 0.0
         env_weight = 1.0
+        conflict = 0.0
 
     smoothed = smooth_belief(prev_belief or env_belief, fused, inertia=inertia)
     entropy = compute_belief_entropy(smoothed)
@@ -282,6 +324,7 @@ def update_agent_belief(
         "entropy": round(entropy, 4),
         "entropy_norm": round(entropy_norm, 4),
         "uncertainty_bucket": bucket_uncertainty(entropy_norm),
+        "signal_conflict": round(conflict, 4),
         "env_weight": round(env_weight, 4),
         "social_weight": round(social_weight, 4),
         "env_belief": env_belief,

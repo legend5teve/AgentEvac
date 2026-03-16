@@ -55,28 +55,44 @@ class TestRecordDeparture:
 
 
 class TestObserveActiveVehicles:
-    def test_infers_arrival_on_disappearance(self, tmp_path):
+    def test_does_not_infer_arrival_on_disappearance(self, tmp_path):
         c = _make_collector(tmp_dir=str(tmp_path))
         c.record_departure("v1", 0.0)
-        c.observe_active_vehicles(["v1"], 10.0)
-        c.observe_active_vehicles([], 20.0)
-        assert "v1" in c._arrival_times
-        assert c._arrival_times["v1"] == pytest.approx(20.0)
-
-    def test_no_arrival_without_departure(self, tmp_path):
-        c = _make_collector(tmp_dir=str(tmp_path))
         c.observe_active_vehicles(["v1"], 10.0)
         c.observe_active_vehicles([], 20.0)
         assert "v1" not in c._arrival_times
 
-    def test_vehicle_not_re_recorded_if_already_arrived(self, tmp_path):
+    def test_tracks_last_seen_active_set(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.observe_active_vehicles(["v1"], 10.0)
+        assert c._last_seen_active == {"v1"}
+        assert c._last_seen_time["v1"] == pytest.approx(10.0)
+
+    def test_observe_active_updates_last_seen_time(self, tmp_path):
         c = _make_collector(tmp_dir=str(tmp_path))
         c.record_departure("v1", 0.0)
         c.observe_active_vehicles(["v1"], 10.0)
-        c.observe_active_vehicles([], 20.0)  # v1 arrives at 20
         c.observe_active_vehicles(["v1"], 30.0)
-        c.observe_active_vehicles([], 40.0)  # would arrive again at 40
-        # First arrival timestamp must be preserved
+        assert c._last_seen_time["v1"] == pytest.approx(30.0)
+
+
+class TestRecordArrival:
+    def test_records_explicit_arrival(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_departure("v1", 0.0)
+        c.record_arrival("v1", 20.0)
+        assert c._arrival_times["v1"] == pytest.approx(20.0)
+
+    def test_requires_prior_departure(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_arrival("v1", 20.0)
+        assert "v1" not in c._arrival_times
+
+    def test_second_arrival_for_same_agent_is_ignored(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_departure("v1", 0.0)
+        c.record_arrival("v1", 20.0)
+        c.record_arrival("v1", 40.0)
         assert c._arrival_times["v1"] == pytest.approx(20.0)
 
 
@@ -193,11 +209,75 @@ class TestAverageTravelTime:
     def test_correct_travel_time_computed(self, tmp_path):
         c = _make_collector(tmp_dir=str(tmp_path))
         c.record_departure("v1", 10.0)
-        c.observe_active_vehicles(["v1"], 10.0)
-        c.observe_active_vehicles([], 70.0)
+        c.record_arrival("v1", 70.0)
         result = c.compute_average_travel_time()
         assert result["average"] == pytest.approx(60.0, rel=1e-6)
         assert result["completed_agents"] == 1
+
+
+class TestDestinationChoiceShare:
+    def test_no_destination_choices_returns_empty_summary(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        result = c.compute_destination_choice_share()
+        assert result["counts"] == {}
+        assert result["fractions"] == {}
+        assert result["total_agents_with_destination"] == 0
+
+    def test_uses_latest_destination_per_agent(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        state_a = {"control_mode": "destination", "selected_option": {"name": "shelter_a"}}
+        state_b = {"control_mode": "destination", "selected_option": {"name": "shelter_b"}}
+        c.record_decision_snapshot("v1", 0.0, 1, state_a, 0, "depart_now")
+        c.record_decision_snapshot("v1", 5.0, 2, state_b, 1, "depart_now")
+        result = c.compute_destination_choice_share()
+        assert result["counts"] == {"shelter_b": 1}
+        assert result["fractions"]["shelter_b"] == pytest.approx(1.0)
+
+    def test_aggregates_counts_and_fractions_across_agents(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        state_a = {"control_mode": "destination", "selected_option": {"name": "shelter_a"}}
+        state_b = {"control_mode": "destination", "selected_option": {"name": "shelter_b"}}
+        route_state = {"control_mode": "route", "selected_option": {"name": "route_1"}}
+        c.record_decision_snapshot("v1", 0.0, 1, state_a, 0, "depart_now")
+        c.record_decision_snapshot("v2", 0.0, 1, state_b, 1, "depart_now")
+        c.record_decision_snapshot("v3", 0.0, 1, state_b, 1, "depart_now")
+        c.record_decision_snapshot("v4", 0.0, 1, route_state, 0, "keep_route")
+        result = c.compute_destination_choice_share()
+        assert result["counts"] == {"shelter_a": 1, "shelter_b": 2}
+        assert result["fractions"]["shelter_a"] == pytest.approx(1.0 / 3.0)
+        assert result["fractions"]["shelter_b"] == pytest.approx(2.0 / 3.0)
+        assert result["total_agents_with_destination"] == 3
+
+
+class TestSignalConflict:
+    def test_no_samples_returns_zero(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        result = c.compute_average_signal_conflict()
+        assert result["global_average"] == pytest.approx(0.0)
+        assert result["sample_count"] == 0
+
+    def test_averages_conflict_scores(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_conflict_sample("v1", 0.4)
+        c.record_conflict_sample("v1", 0.8)
+        result = c.compute_average_signal_conflict()
+        assert result["global_average"] == pytest.approx(0.6, rel=1e-6)
+        assert result["sample_count"] == 2
+
+    def test_per_agent_conflict_computed(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_conflict_sample("v1", 0.2)
+        c.record_conflict_sample("v2", 0.6)
+        result = c.compute_average_signal_conflict()
+        assert result["per_agent_average"]["v1"] == pytest.approx(0.2)
+        assert result["per_agent_average"]["v2"] == pytest.approx(0.6)
+
+    def test_single_sample_returns_exact_value(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_conflict_sample("v1", 0.73)
+        result = c.compute_average_signal_conflict()
+        assert result["global_average"] == pytest.approx(0.73)
+        assert result["sample_count"] == 1
 
 
 class TestSummaryAndExport:
@@ -213,6 +293,8 @@ class TestSummaryAndExport:
             "run_mode", "departed_agents", "arrived_agents",
             "departure_time_variability", "route_choice_entropy",
             "decision_instability",
+            "destination_choice_share",
+            "average_signal_conflict",
         ):
             assert key in s
 

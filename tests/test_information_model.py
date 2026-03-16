@@ -56,6 +56,51 @@ class TestInjectSignalNoise:
         sig["extra"] = "changed"
         assert original["extra"] == "keep"
 
+    def test_distance_scaling_close_fire_has_less_noise(self):
+        """Close margin should produce smaller noise spread than far margin."""
+        rng_close = random.Random(99)
+        rng_far = random.Random(99)
+        close = inject_signal_noise(
+            {"base_margin_m": 50.0}, sigma_info=40.0, rng=rng_close, distance_ref_m=500.0
+        )
+        far = inject_signal_noise(
+            {"base_margin_m": 1000.0}, sigma_info=40.0, rng=rng_far, distance_ref_m=500.0
+        )
+        # Same seed → same unit Gaussian draw; larger effective sigma → larger |delta|.
+        assert abs(close["noise_delta_m"]) < abs(far["noise_delta_m"])
+
+    def test_distance_scaling_zero_margin_gives_zero_noise(self):
+        """Fire at the agent (margin=0) → effective sigma=0 → no noise."""
+        sig = inject_signal_noise(
+            {"base_margin_m": 0.0}, sigma_info=40.0, rng=random.Random(1), distance_ref_m=500.0
+        )
+        assert sig["noise_delta_m"] == pytest.approx(0.0)
+        assert sig["observed_margin_m"] == pytest.approx(0.0)
+
+    def test_distance_scaling_at_ref_distance_equals_sigma(self):
+        """At margin == distance_ref_m, effective sigma should equal sigma_info."""
+        rng1 = random.Random(42)
+        rng2 = random.Random(42)
+        scaled = inject_signal_noise(
+            {"base_margin_m": 500.0}, sigma_info=40.0, rng=rng1, distance_ref_m=500.0
+        )
+        flat = inject_signal_noise(
+            {"base_margin_m": 500.0}, sigma_info=40.0, rng=rng2, distance_ref_m=0.0
+        )
+        assert scaled["noise_delta_m"] == pytest.approx(flat["noise_delta_m"])
+
+    def test_distance_scaling_disabled_when_ref_zero(self):
+        """distance_ref_m=0 should behave identically to legacy (no scaling)."""
+        rng1 = random.Random(7)
+        rng2 = random.Random(7)
+        with_ref = inject_signal_noise(
+            {"base_margin_m": 300.0}, sigma_info=30.0, rng=rng1, distance_ref_m=0.0
+        )
+        without_ref = inject_signal_noise(
+            {"base_margin_m": 300.0}, sigma_info=30.0, rng=rng2
+        )
+        assert with_ref["noise_delta_m"] == pytest.approx(without_ref["noise_delta_m"])
+
 
 class TestApplySignalDelay:
     def _make_signal(self, round_n):
