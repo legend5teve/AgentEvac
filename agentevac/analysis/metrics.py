@@ -1,7 +1,8 @@
 """Run-level metrics collection and aggregation for evacuation simulations.
 
 ``RunMetricsCollector`` accumulates agent-level events over the course of a simulation
-run and computes five aggregate KPIs used for calibration and cross-scenario comparison:
+run and computes five aggregate KPIs plus one destination-share summary used for
+calibration and cross-scenario comparison:
 
     1. **Departure-time variability** — Population variance of departure timestamps.
        High variability suggests agents are making nuanced, heterogeneous decisions.
@@ -22,6 +23,9 @@ run and computes five aggregate KPIs used for calibration and cross-scenario com
     5. **Average travel time** — Mean time from departure to arrival for agents that
        completed their evacuation during the simulation window.
 
+    6. **Destination choice share** — Final per-agent destination commitments
+       aggregated into counts and fractions for each designated evacuation point.
+
 The collector writes a JSON summary to disk when ``export_run_metrics`` or ``close``
 is called.  The file path is auto-timestamped to avoid overwrites across runs.
 """
@@ -37,9 +41,10 @@ class RunMetricsCollector:
     """Stateful collector for run-level simulation metrics.
 
     Designed to be instantiated once per simulation run.  Event-recording methods
-    (``record_departure``, ``observe_active_vehicles``, etc.) are called by the main
-    simulation loop during each step.  Aggregation methods (``compute_*``) are cheap
-    and may be called at any time, including mid-run for live monitoring.
+    (``record_departure``, ``record_arrival``, ``observe_active_vehicles``, etc.) are
+    called by the main simulation loop during each step.  Aggregation methods
+    (``compute_*``) are cheap and may be called at any time, including mid-run for
+    live monitoring.
 
     Args:
         enabled: If ``False``, all recording and export methods are no-ops.
@@ -64,11 +69,17 @@ class RunMetricsCollector:
         self._decision_snapshot_count = 0
         self._decision_changes: Dict[str, int] = {}
         self._last_decision_state: Dict[str, str] = {}
+        self._final_destination_by_agent: Dict[str, str] = {}
 
         self._exposure_sum = 0.0
         self._exposure_count = 0
         self._exposure_by_agent_sum: Dict[str, float] = {}
         self._exposure_by_agent_count: Dict[str, int] = {}
+
+        self._conflict_sum = 0.0
+        self._conflict_count = 0
+        self._conflict_by_agent_sum: Dict[str, float] = {}
+        self._conflict_by_agent_count: Dict[str, int] = {}
 
     @staticmethod
     def _timestamped_path(base_path: str) -> str:
@@ -108,11 +119,31 @@ class RunMetricsCollector:
             self._depart_times[agent_id] = float(sim_t_s)
         self._last_seen_time[agent_id] = float(sim_t_s)
 
-    def observe_active_vehicles(self, active_vehicle_ids: List[str], sim_t_s: float) -> None:
-        """Update the active-vehicle set and infer arrivals from disappearances.
+    def record_arrival(self, agent_id: str, sim_t_s: float) -> None:
+        """Record the first explicit arrival event for an agent.
 
-        Vehicles that were active in the previous call but are absent now are assumed
-        to have reached their destination and are marked as arrived.
+        Arrival timestamps are only accepted for agents that have already
+        departed.  Subsequent arrival records for the same agent are ignored so
+        the original completion timestamp is preserved.
+
+        Args:
+            agent_id: Vehicle ID.
+            sim_t_s: Simulation time of arrival in seconds.
+        """
+        if not self.enabled:
+            return
+        if agent_id not in self._depart_times or agent_id in self._arrival_times:
+            return
+        self._arrival_times[agent_id] = float(sim_t_s)
+        self._last_seen_time[agent_id] = float(sim_t_s)
+
+    def observe_active_vehicles(self, active_vehicle_ids: List[str], sim_t_s: float) -> None:
+        """Update the active-vehicle set for live bookkeeping only.
+
+        Arrival timing is intentionally not inferred from disappearances because a
+        transient omission from ``traci.vehicle.getIDList()`` can otherwise
+        produce false travel-time completions.  True arrivals should be recorded
+        through :meth:`record_arrival` using explicit SUMO arrival events.
 
         Args:
             active_vehicle_ids: List of vehicle IDs currently in the simulation.
@@ -126,10 +157,6 @@ class RunMetricsCollector:
         for vid in current:
             self._last_seen_time[vid] = now
 
-        for vid in (self._last_seen_active - current):
-            if vid in self._depart_times and vid not in self._arrival_times:
-                self._arrival_times[vid] = now
-
         self._last_seen_active = current
 
     def record_decision_snapshot(
@@ -141,10 +168,12 @@ class RunMetricsCollector:
         choice_idx: Optional[int],
         action_status: str,
     ) -> None:
-        """Record a decision-round snapshot for entropy and instability tracking.
+        """Record a decision-round snapshot for entropy, instability, and final destination tracking.
 
         Detects decision-state changes by comparing ``control_mode::choice_idx``
-        against the previous round's string for the same agent.
+        against the previous round's string for the same agent.  In destination
+        mode, the latest selected destination name is also retained as the
+        agent's current final destination commitment.
 
         Args:
             agent_id: Vehicle ID.
@@ -176,6 +205,8 @@ class RunMetricsCollector:
             choice_name = f"choice_{int(choice_idx)}"
         label = f"{state.get('control_mode', 'unknown')}::{choice_name}"
         self._choice_counts[label] = self._choice_counts.get(label, 0) + 1
+        if state.get("control_mode") == "destination":
+            self._final_destination_by_agent[agent_id] = str(choice_name)
 
     def record_exposure_sample(
         self,
@@ -205,6 +236,47 @@ class RunMetricsCollector:
         self._exposure_by_agent_sum[agent_id] = self._exposure_by_agent_sum.get(agent_id, 0.0) + exposure
         self._exposure_by_agent_count[agent_id] = self._exposure_by_agent_count.get(agent_id, 0) + 1
         self._last_seen_time[agent_id] = float(sim_t_s)
+
+    def record_conflict_sample(
+        self,
+        agent_id: str,
+        signal_conflict: float,
+    ) -> None:
+        """Record one signal-conflict sample for an active vehicle.
+
+        Called once per agent per decision round from the belief update.
+        The conflict score (JSD between env and social beliefs, [0, 1]) enables
+        post-hoc RQ1 analysis of the mediation pathway:
+        σ_info → signal_conflict → behavioral DVs.
+
+        Args:
+            agent_id: Vehicle ID.
+            signal_conflict: JSD-based conflict score ∈ [0, 1].
+        """
+        if not self.enabled:
+            return
+        val = float(signal_conflict)
+        self._conflict_sum += val
+        self._conflict_count += 1
+        self._conflict_by_agent_sum[agent_id] = self._conflict_by_agent_sum.get(agent_id, 0.0) + val
+        self._conflict_by_agent_count[agent_id] = self._conflict_by_agent_count.get(agent_id, 0) + 1
+
+    def compute_average_signal_conflict(self) -> Dict[str, Any]:
+        """Compute global and per-agent average signal conflict.
+
+        Returns:
+            Dict with ``global_average``, ``sample_count``, and ``per_agent_average``.
+        """
+        global_avg = (self._conflict_sum / float(self._conflict_count)) if self._conflict_count > 0 else 0.0
+        per_agent: Dict[str, float] = {}
+        for agent_id, total in self._conflict_by_agent_sum.items():
+            cnt = self._conflict_by_agent_count.get(agent_id, 0)
+            per_agent[agent_id] = (total / float(cnt)) if cnt > 0 else 0.0
+        return {
+            "global_average": round(global_avg, 6),
+            "sample_count": self._conflict_count,
+            "per_agent_average": per_agent,
+        }
 
     def compute_departure_time_variability(self) -> float:
         """Compute the population variance of agent departure times (seconds²).
@@ -300,11 +372,34 @@ class RunMetricsCollector:
             "per_agent": per_agent,
         }
 
+    def compute_destination_choice_share(self) -> Dict[str, Any]:
+        """Compute counts and fractions of agents' latest destination commitments.
+
+        Returns:
+            Dict with ``counts``, ``fractions``, and
+            ``total_agents_with_destination``.
+        """
+        counts: Dict[str, int] = {}
+        for choice_name in self._final_destination_by_agent.values():
+            counts[choice_name] = counts.get(choice_name, 0) + 1
+
+        total = sum(counts.values())
+        fractions = {
+            choice_name: (float(count) / float(total)) if total > 0 else 0.0
+            for choice_name, count in counts.items()
+        }
+        return {
+            "counts": counts,
+            "fractions": fractions,
+            "total_agents_with_destination": total,
+        }
+
     def summary(self) -> Dict[str, Any]:
         """Assemble the full run-metrics summary dict.
 
         Returns:
-            A JSON-serializable dict containing all five KPIs plus bookkeeping fields.
+            A JSON-serializable dict containing all KPIs, destination-share
+            summary, and bookkeeping fields.
         """
         return {
             "run_mode": self.run_mode,
@@ -316,6 +411,8 @@ class RunMetricsCollector:
             "decision_instability": self.compute_decision_instability(),
             "average_hazard_exposure": self.compute_average_hazard_exposure(),
             "average_travel_time": self.compute_average_travel_time(),
+            "average_signal_conflict": self.compute_average_signal_conflict(),
+            "destination_choice_share": self.compute_destination_choice_share(),
         }
 
     def export_run_metrics(self, path: Optional[str] = None) -> Optional[str]:

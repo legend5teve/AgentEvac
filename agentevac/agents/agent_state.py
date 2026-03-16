@@ -28,8 +28,9 @@ Psychological profile parameters stored in each agent's ``profile`` dict:
 """
 
 import math
+import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 @dataclass
@@ -70,6 +71,49 @@ class AgentRuntimeState:
 # Global registry of all agent states, keyed by vehicle ID.
 # Populated lazily as vehicles are registered in the simulation.
 AGENT_STATES: Dict[str, AgentRuntimeState] = {}
+
+
+def sample_profile_params(
+    agent_id: str,
+    means: Dict[str, float],
+    spreads: Dict[str, float],
+    bounds: Dict[str, Tuple[float, float]],
+) -> Dict[str, float]:
+    """Sample per-agent profile parameters from truncated normal distributions.
+
+    Each parameter is drawn from ``N(mean, spread)`` and clipped to ``[lo, hi]``.
+    When ``spread <= 0`` the mean is returned unchanged (no heterogeneity).
+
+    A deterministic RNG seeded by ``agent_id`` ensures that the same agent always
+    receives the same profile regardless of which code path creates it first.
+
+    Args:
+        agent_id: Vehicle ID used to seed the per-agent RNG.
+        means: Dict of parameter names to population means.
+        spreads: Dict of parameter names to population standard deviations.
+            Missing keys or values <= 0 disable sampling for that parameter.
+        bounds: Dict of parameter names to ``(lo, hi)`` clipping bounds.
+
+    Returns:
+        A dict of sampled parameter values, one per key in ``means``.
+    """
+    rng = random.Random(hash(agent_id))
+    result: Dict[str, float] = {}
+    for key, mu in means.items():
+        sigma = float(spreads.get(key, 0.0))
+        lo, hi = bounds.get(key, (mu, mu))
+        if sigma <= 0.0:
+            result[key] = mu
+        else:
+            # Rejection-sample from truncated normal (bounded).
+            for _ in range(100):
+                v = rng.gauss(mu, sigma)
+                if lo <= v <= hi:
+                    result[key] = round(v, 4)
+                    break
+            else:
+                result[key] = round(max(lo, min(hi, mu)), 4)
+    return result
 
 
 def ensure_agent_state(

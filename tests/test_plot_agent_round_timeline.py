@@ -38,7 +38,7 @@ class TestTimelineRows:
         ]
 
     def test_completed_agent_uses_departure_plus_travel_time(self):
-        rows, final_round = _timeline_rows(
+        rows, final_round, warnings = _timeline_rows(
             self._event_rows(),
             [{"event": "route_change", "veh_id": "veh_a", "time_s": 30.0}],
             {"average_travel_time": {"per_agent": {"veh_a": 15.0}}},
@@ -46,30 +46,62 @@ class TestTimelineRows:
         )
         by_id = {row["veh_id"]: row for row in rows}
         assert final_round == 4
+        assert warnings == []
         assert by_id["veh_a"]["start_round"] == 2
         assert by_id["veh_a"]["end_round"] == 3
         assert by_id["veh_a"]["change_rounds"] == [3]
         assert by_id["veh_a"]["status"] == "completed"
+        assert by_id["veh_a"]["end_source"] == "travel_time_fallback"
+
+    def test_explicit_arrival_event_overrides_travel_time_fallback(self):
+        rows, _, warnings = _timeline_rows(
+            self._event_rows() + [{"event": "arrival", "veh_id": "veh_a", "sim_t_s": 40.0}],
+            [{"event": "route_change", "veh_id": "veh_a", "time_s": 40.0}],
+            {"average_travel_time": {"per_agent": {"veh_a": 15.0}}},
+            include_no_departure=False,
+        )
+        by_id = {row["veh_id"]: row for row in rows}
+        assert warnings == []
+        assert by_id["veh_a"]["end_round"] == 4
+        assert by_id["veh_a"]["change_rounds"] == [4]
+        assert by_id["veh_a"]["end_source"] == "arrival_event"
 
     def test_incomplete_agent_extends_to_final_round(self):
-        rows, _ = _timeline_rows(
+        rows, _, warnings = _timeline_rows(
             self._event_rows(),
             [],
             {"average_travel_time": {"per_agent": {}}},
             include_no_departure=False,
         )
         by_id = {row["veh_id"]: row for row in rows}
+        assert warnings == []
         assert by_id["veh_a"]["end_round"] == 4
         assert by_id["veh_a"]["status"] == "incomplete"
+        assert by_id["veh_a"]["end_source"] == "final_round_fallback"
 
     def test_include_no_departure_uses_first_route_change_round(self):
-        rows, _ = _timeline_rows(
+        rows, _, warnings = _timeline_rows(
             self._event_rows(),
             [{"event": "route_change", "veh_id": "veh_c", "time_s": 30.0}],
             {"average_travel_time": {"per_agent": {}}},
             include_no_departure=True,
         )
         by_id = {row["veh_id"]: row for row in rows}
+        assert warnings == []
         assert by_id["veh_c"]["start_round"] == 3
         assert by_id["veh_c"]["end_round"] == 4
         assert by_id["veh_c"]["status"] == "no_departure_event"
+
+    def test_warns_when_route_change_occurs_after_fallback_end_round(self):
+        rows, _, warnings = _timeline_rows(
+            self._event_rows(),
+            [{"event": "route_change", "veh_id": "veh_a", "time_s": 40.0}],
+            {"average_travel_time": {"per_agent": {"veh_a": 5.0}}},
+            include_no_departure=False,
+        )
+        by_id = {row["veh_id"]: row for row in rows}
+        assert by_id["veh_a"]["end_round"] == 2
+        assert by_id["veh_a"]["change_rounds"] == [4]
+        assert len(warnings) == 1
+        assert "veh_a" in warnings[0]
+        assert "source=travel_time_fallback" in warnings[0]

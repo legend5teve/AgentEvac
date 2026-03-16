@@ -44,12 +44,19 @@ def inject_signal_noise(
     signal: Dict[str, Any],
     sigma_info: float,
     rng: Optional[random.Random] = None,
+    distance_ref_m: float = 0.0,
 ) -> Dict[str, Any]:
     """Add zero-mean Gaussian noise to the observed fire margin.
 
     Simulates imperfect environmental sensing (e.g., smoke, sensor noise, GPS error).
     The noisy observation is clamped by the natural arithmetic (can go negative, meaning
     the agent *believes* the fire has reached it even if it hasn't, or vice-versa).
+
+    When ``distance_ref_m > 0``, the effective noise standard deviation is scaled by
+    the ratio ``base_margin / distance_ref_m`` (proposal Eq. 1: ``Dist(s_t)``).  This
+    models the perceptual reality that close fires are easy to judge while distant fires
+    are harder to assess.  Setting ``distance_ref_m=0`` (default) disables scaling and
+    applies ``sigma_info`` uniformly (legacy behaviour).
 
     If ``base_margin_m`` is absent (no fire active or edge not found), the function
     returns the signal unchanged with ``observed_margin_m=None``.
@@ -60,6 +67,9 @@ def inject_signal_noise(
             A value of 0 disables noise injection.
         rng: Optional seeded ``random.Random`` instance for reproducible noise.
             Falls back to the global ``random`` module if not provided.
+        distance_ref_m: Reference distance for distance-based noise scaling.
+            When > 0, effective sigma = sigma_info * (base_margin / distance_ref_m).
+            When 0, sigma_info is applied uniformly (no scaling).
 
     Returns:
         A shallow copy of ``signal`` with added fields:
@@ -75,6 +85,11 @@ def inject_signal_noise(
         out["observed_margin_m"] = None
         out["observed_state"] = "unknown"
         return out
+
+    # Distance-based noise scaling (proposal Eq. 1): closer fire → less noise.
+    d_ref = float(distance_ref_m)
+    if d_ref > 0.0 and sigma > 0.0:
+        sigma = sigma * (max(0.0, float(base_margin)) / d_ref)
 
     src = rng if rng is not None else random
     noise_delta = float(src.gauss(0.0, sigma)) if sigma > 0.0 else 0.0
@@ -144,6 +159,7 @@ def sample_environment_signal(
     decision_round: int,
     sigma_info: float,
     rng: Optional[random.Random] = None,
+    distance_ref_m: float = 0.0,
 ) -> Dict[str, Any]:
     """Build a noisy environmental hazard signal for one agent at one decision round.
 
@@ -163,6 +179,9 @@ def sample_environment_signal(
         decision_round: Global decision-round counter (used as a history key).
         sigma_info: Noise standard deviation in metres (0 = noiseless).
         rng: Optional seeded RNG for reproducibility.
+        distance_ref_m: Reference distance for distance-based noise scaling (metres).
+            When > 0, noise sigma scales with base_margin / distance_ref_m.
+            When 0, sigma_info is applied uniformly (no scaling).
 
     Returns:
         A signal dict with fields including ``base_margin_m``, ``observed_margin_m``,
@@ -186,7 +205,7 @@ def sample_environment_signal(
         "observed_margin_m": None,
         "observed_state": "unknown",
     }
-    return inject_signal_noise(signal, sigma_info, rng=rng)
+    return inject_signal_noise(signal, sigma_info, rng=rng, distance_ref_m=distance_ref_m)
 
 
 def build_social_signal(

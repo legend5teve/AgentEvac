@@ -13,6 +13,7 @@ from agentevac.agents.agent_state import (
     append_signal_history,
     append_social_history,
     ensure_agent_state,
+    sample_profile_params,
     snapshot_agent_state,
 )
 
@@ -23,6 +24,45 @@ def clear_agent_states():
     AGENT_STATES.clear()
     yield
     AGENT_STATES.clear()
+
+
+class TestSampleProfileParams:
+    _MEANS = {"theta_trust": 0.5, "theta_r": 0.45, "lambda_e": 1.0}
+    _BOUNDS = {"theta_trust": (0.0, 1.0), "theta_r": (0.1, 0.9), "lambda_e": (0.0, 5.0)}
+
+    def test_zero_spread_returns_exact_means(self):
+        spreads = {"theta_trust": 0.0, "theta_r": 0.0, "lambda_e": 0.0}
+        result = sample_profile_params("v1", self._MEANS, spreads, self._BOUNDS)
+        assert result["theta_trust"] == 0.5
+        assert result["theta_r"] == 0.45
+        assert result["lambda_e"] == 1.0
+
+    def test_nonzero_spread_produces_inter_agent_variation(self):
+        spreads = {"theta_trust": 0.15, "theta_r": 0.1, "lambda_e": 0.3}
+        r1 = sample_profile_params("v1", self._MEANS, spreads, self._BOUNDS)
+        r2 = sample_profile_params("v2", self._MEANS, spreads, self._BOUNDS)
+        # Different agent IDs should (almost certainly) get different profiles.
+        assert r1 != r2
+
+    def test_same_agent_id_gives_same_profile(self):
+        spreads = {"theta_trust": 0.15, "theta_r": 0.1, "lambda_e": 0.3}
+        r1 = sample_profile_params("v1", self._MEANS, spreads, self._BOUNDS)
+        r2 = sample_profile_params("v1", self._MEANS, spreads, self._BOUNDS)
+        assert r1 == r2
+
+    def test_values_stay_within_bounds(self):
+        spreads = {"theta_trust": 0.5, "theta_r": 0.5, "lambda_e": 2.0}
+        for agent_id in [f"v{i}" for i in range(50)]:
+            result = sample_profile_params(agent_id, self._MEANS, spreads, self._BOUNDS)
+            assert 0.0 <= result["theta_trust"] <= 1.0
+            assert 0.1 <= result["theta_r"] <= 0.9
+            assert 0.0 <= result["lambda_e"] <= 5.0
+
+    def test_missing_spread_key_uses_mean(self):
+        spreads = {"theta_trust": 0.15}  # theta_r and lambda_e missing
+        result = sample_profile_params("v1", self._MEANS, spreads, self._BOUNDS)
+        assert result["theta_r"] == 0.45
+        assert result["lambda_e"] == 1.0
 
 
 class TestEnsureAgentState:

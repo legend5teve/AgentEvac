@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Plot a round-based agent timeline with departure, arrival, and route-change overlays."""
+"""Plot a round-based agent timeline with departure, arrival, and route-change overlays.
+
+The plot prefers explicit ``arrival`` events from ``events_*.jsonl``. When those
+are absent, it falls back to inferring the bar end from
+``departure_time + average_travel_time.per_agent`` in ``run_metrics_*.json``.
+"""
 
 from __future__ import annotations
 
@@ -92,6 +97,20 @@ def _departure_times(event_rows: list[dict[str, Any]]) -> dict[str, float]:
     return out
 
 
+def _arrival_times(event_rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Collect the first explicit arrival time for each agent."""
+    out: dict[str, float] = {}
+    for rec in event_rows:
+        if rec.get("event") != "arrival":
+            continue
+        vid = rec.get("veh_id")
+        sim_t = rec.get("sim_t_s")
+        if vid is None or sim_t is None:
+            continue
+        out.setdefault(str(vid), float(sim_t))
+    return out
+
+
 def _route_change_times(replay_rows: list[dict[str, Any]]) -> dict[str, list[float]]:
     """Collect route-change timestamps per agent from the replay log."""
     out: dict[str, list[float]] = {}
@@ -114,16 +133,18 @@ def _timeline_rows(
     metrics: dict[str, Any],
     *,
     include_no_departure: bool,
-) -> tuple[list[dict[str, Any]], int]:
-    """Build per-agent timeline rows from departures, travel times, and route changes.
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """Build per-agent timeline rows from departures, arrivals, travel times, and route changes.
 
     Returns:
-        A tuple `(rows, final_round)` where `rows` contains one dict per agent with
-        `start_round`, `end_round`, `change_rounds`, and a `status` label.
+        A tuple ``(rows, final_round, warnings)`` where ``rows`` contains one
+        dict per agent with ``start_round``, ``end_round``, ``change_rounds``,
+        and a ``status`` label.
     """
     rounds = _round_table(event_rows)
     final_round = rounds[-1][0]
     departures = _departure_times(event_rows)
+    arrivals = _arrival_times(event_rows)
     route_changes = _route_change_times(replay_rows)
     travel_times = metrics.get("average_travel_time", {}).get("per_agent", {}) or {}
 
@@ -132,6 +153,7 @@ def _timeline_rows(
         all_agent_ids.update(route_changes.keys())
 
     rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for vid in sorted(all_agent_ids):
         depart_time = departures.get(vid)
         change_times = route_changes.get(vid, [])
@@ -145,15 +167,28 @@ def _timeline_rows(
             start_round = _round_for_time(depart_time, rounds)
             status = "completed" if vid in travel_times else "incomplete"
 
-        if vid in travel_times and depart_time is not None:
+        if vid in arrivals:
+            arrival_time = float(arrivals[vid])
+            end_round = _round_for_time(arrival_time, rounds)
+            status = "completed"
+            end_source = "arrival_event"
+        elif vid in travel_times and depart_time is not None:
             arrival_time = float(depart_time) + float(travel_times[vid])
             end_round = _round_for_time(arrival_time, rounds)
             status = "completed"
+            end_source = "travel_time_fallback"
         else:
             end_round = final_round
+            end_source = "final_round_fallback"
 
         end_round = max(end_round, start_round)
         change_rounds = sorted({_round_for_time(t, rounds) for t in change_times if _round_for_time(t, rounds) >= start_round})
+        late_changes = [round_idx for round_idx in change_rounds if round_idx > end_round]
+        if late_changes:
+            warnings.append(
+                f"{vid}: route-change rounds {late_changes} occur after end_round={end_round} "
+                f"(source={end_source})."
+            )
 
         rows.append({
             "veh_id": vid,
@@ -161,10 +196,11 @@ def _timeline_rows(
             "end_round": end_round,
             "change_rounds": change_rounds,
             "status": status,
+            "end_source": end_source,
         })
 
     rows.sort(key=lambda row: (row["start_round"], row["veh_id"]))
-    return rows, final_round
+    return rows, final_round, warnings
 
 
 def plot_agent_round_timeline(
@@ -183,7 +219,7 @@ def plot_agent_round_timeline(
     event_rows = load_jsonl(events_path)
     replay_rows = load_jsonl(replay_path)
     metrics = load_json(metrics_path)
-    timeline_rows, final_round = _timeline_rows(
+    timeline_rows, final_round, warnings = _timeline_rows(
         event_rows,
         replay_rows,
         metrics,
@@ -257,6 +293,8 @@ def plot_agent_round_timeline(
     print(f"[PLOT] replay={replay_path}")
     print(f"[PLOT] metrics={metrics_path}")
     print(f"[PLOT] output={out_path}")
+    for item in warnings:
+        print(f"[WARN] {item}")
     if show:
         plt.show()
     plt.close(fig)
