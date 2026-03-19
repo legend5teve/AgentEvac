@@ -4326,6 +4326,10 @@ try:
         active_vehicle_ids = list(traci.vehicle.getIDList())
         _refresh_active_agent_live_status(sim_t, active_vehicle_ids)
         metrics.observe_active_vehicles(active_vehicle_ids, sim_t)
+        # Early termination: stop when all agents have evacuated
+        if len(spawned) == len(SPAWN_EVENTS) and not active_vehicle_ids:
+            print(f"[SIM] All {len(SPAWN_EVENTS)} agents evacuated by t={sim_t:.1f}s — ending early.")
+            break
         delta_t = traci.simulation.getDeltaT()
         decision_period_steps = max(1, int(round(DECISION_PERIOD_S / max(1e-9, delta_t))))
         if step_idx % decision_period_steps == 0:
