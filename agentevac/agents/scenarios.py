@@ -195,10 +195,11 @@ def filter_menu_for_scenario(
     for item in menu:
         out = dict(item)
         if not cfg["official_route_guidance_visible"]:
-            # Remove advisory labels produced by the operator briefing logic.
+            # Remove advisory labels and authority source produced by the operator briefing logic.
             out.pop("advisory", None)
             out.pop("briefing", None)
             out.pop("reasons", None)
+            out.pop("guidance_source", None)
 
         if cfg["mode"] == "no_notice":
             # Keep fields an agent could plausibly know from local familiarity:
@@ -245,17 +246,14 @@ def scenario_prompt_suffix(mode: str) -> str:
         )
     if cfg["mode"] == "alert_guided":
         return (
-            "This is an alert-guided scenario: official alerts describe the fire, but they do not prescribe a route. "
-            # "Use forecast and hazard cues, but make your own navigation choice."
-            "but do not prescribe a specific route. Do NOT invent route guidance. Use the provided official alert content, "
-            "hazard and forecast cues (if provided), and local road conditions to choose when, where and how to evacuate."
-
+            "This is an alert-guided scenario: official alerts describe the fire but do not prescribe a specific route. "
+            "Do NOT invent route guidance. Use the provided official alert content, "
+            "hazard and forecast cues, and local road conditions to decide when, where, and how to evacuate."
         )
     return (
-        "This is an advice-guided scenario: official alerts include route-oriented guidance. "
-        "You may use advisories, briefings, and expected utility as formal support. "
-        # "ADVICE-GUIDED scenario: officials issue an evacuation *order* (leave immediately) and include route-oriented guidance (may be high-level and may change)."
-        "Default to following designated routes/instructions unless they are blocked, unsafe "
-        "or extremely congested; if deviating, state why and pick the safest feasible alternative. Stay responsive to updates."
-
+        "This is an advice-guided evacuation: the Emergency Operations Center has issued official route guidance for your area. "
+        "Follow routes marked advisory='Recommended' unless they are physically blocked or impassable. "
+        "If you must deviate from official guidance, state why and choose the safest feasible alternative. "
+        "Delayed departure or ignoring recommended routes increases your exposure to dangerous fire conditions. "
+        "Stay responsive to updated guidance as conditions change."
     )
