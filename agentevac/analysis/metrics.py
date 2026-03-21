@@ -137,6 +137,10 @@ class RunMetricsCollector:
         self._arrival_times[agent_id] = float(sim_t_s)
         self._last_seen_time[agent_id] = float(sim_t_s)
 
+    def arrived_count(self) -> int:
+        """Return the number of agents that have arrived at their destination."""
+        return len(self._arrival_times)
+
     def observe_active_vehicles(self, active_vehicle_ids: List[str], sim_t_s: float) -> None:
         """Update the active-vehicle set for live bookkeeping only.
 
