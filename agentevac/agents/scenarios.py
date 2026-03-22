@@ -238,11 +238,10 @@ def scenario_prompt_suffix(mode: str) -> str:
     cfg = load_scenario_config(mode)
     if cfg["mode"] == "no_notice":
         return (
-            "This is a no-notice wildfire scenario: do not assume official route instructions exist. "
-            "Rely mainly on your_observation, inbox messages, and your own caution. "
-            "Do NOT invent official instructions. Base decisions on environmental cues (smoke/flames/visibility), "
-            "your current hazard or forecast inputs if provided, and peer-to-peer messages. Seek credible info when available "
-            ", and choose conservative actions if uncertain."
+            "This is a no-notice wildfire scenario: no official warnings or route instructions exist yet. "
+            "Do NOT invent official instructions. "
+            "Base decisions on your_observation.environment_signal, inbox messages, "
+            "and neighborhood_observation. Choose conservative actions if uncertain."
         )
     if cfg["mode"] == "alert_guided":
         return (

@@ -264,21 +264,22 @@ def render_forecast_briefing(
     uncertainty = str(belief.get("uncertainty_bucket") or "High")
 
     if blocked_edges > 0:
-        route_clause = f"{blocked_edges} route-head segment(s) may be blocked"
+        blocked_word = "segment" if blocked_edges == 1 else "segments"
+        route_clause = f"route ahead has {blocked_edges} blocked {blocked_word}"
     else:
-        route_clause = f"route head looks {route_band}"
+        route_clause = f"route ahead looks {route_band}"
 
     if edge_forecast.get("blocked"):
-        edge_clause = "your current edge may be overtaken"
+        edge_clause = "your current location may be overtaken by fire"
     else:
-        edge_clause = f"your current edge looks {edge_band}"
+        edge_clause = f"your current location looks {edge_band}"
 
-    # Select a tone word based on belief danger probability and uncertainty.
+    # Select a tone based on belief danger probability and uncertainty.
     if p_danger >= 0.5:
-        tone = "Forecast suggests the threat is building"
+        tone = "Conditions are worsening"
     elif uncertainty == "High":
-        tone = "Forecast is uncertain, but conditions may tighten"
+        tone = "Conditions are uncertain and may tighten"
     else:
-        tone = "Forecast suggests a manageable window"
+        tone = "Conditions appear manageable for now"
 
-    return f"{tone} within {horizon_s}s: {edge_clause}, and {route_clause}."
+    return f"{tone} (forecast horizon {horizon_s}s): {edge_clause}, and {route_clause}."

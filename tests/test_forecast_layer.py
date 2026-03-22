@@ -187,14 +187,14 @@ class TestRenderForecastBriefing:
             "v1", self._forecast(), self._belief_high_danger(),
             self._edge_safe(), self._route_safe()
         )
-        assert "building" in result or "threat" in result.lower()
+        assert "worsening" in result.lower()
 
     def test_high_uncertainty_low_danger_uses_uncertain_tone(self):
         result = render_forecast_briefing(
             "v1", self._forecast(), self._belief_uncertain(),
             self._edge_safe(), self._route_safe()
         )
-        assert "uncertain" in result.lower() or "tighten" in result.lower()
+        assert "uncertain" in result.lower()
 
     def test_blocked_current_edge_mentions_overtaken(self):
         result = render_forecast_briefing(

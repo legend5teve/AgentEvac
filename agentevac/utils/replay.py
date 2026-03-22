@@ -51,6 +51,7 @@ class RouteReplay:
         self._dialog_csv_writer = None
         self._schedule = {}  # step_idx -> veh_id -> route_change record
         self._departure_schedule = {}  # step_idx -> veh_id -> departure_release record
+        self._edge_traces: Dict[str, List[str]] = {}  # veh_id -> ordered edge list
 
         if self.mode == "record":
             self.path = self._build_record_path(path)
@@ -79,7 +80,7 @@ class RouteReplay:
             self._dialog_csv_writer.writeheader()
             self._dialog_csv_fh.flush()
         elif self.mode == "replay":
-            self._schedule, self._departure_schedule = self._load_schedule(self.path)
+            self._schedule, self._departure_schedule, self._edge_traces = self._load_schedule(self.path)
         else:
             raise ValueError(f"Unknown RUN_MODE={mode}. Use 'record' or 'replay'.")
 
@@ -114,8 +115,9 @@ class RouteReplay:
     def _load_schedule(path: str):
         """Load replayable events from a JSONL file by step index.
 
-        Replay currently consumes ``route_change`` and ``departure_release`` events.
-        All other events (cognition, metrics snapshots, dialogs) are silently ignored.
+        Replay consumes ``route_change``, ``departure_release``, and ``edge_trace``
+        events.  All other events (cognition, metrics snapshots, dialogs) are silently
+        ignored.
 
         Args:
             path: Path to the recorded JSONL file.
@@ -124,9 +126,11 @@ class RouteReplay:
             Tuple of dicts:
                 - ``route_schedule``: ``step_idx`` → {``veh_id`` → route-change record}
                 - ``departure_schedule``: ``step_idx`` → {``veh_id`` → departure record}
+                - ``edge_traces``: ``veh_id`` → ordered list of edges traversed
         """
         route_schedule = {}
         departure_schedule = {}
+        edge_traces: Dict[str, List[str]] = {}
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -142,7 +146,10 @@ class RouteReplay:
                     step = int(rec["step"])
                     vid = rec["veh_id"]
                     departure_schedule.setdefault(step, {})[vid] = rec
-        return route_schedule, departure_schedule
+                elif event == "edge_trace":
+                    vid = rec["veh_id"]
+                    edge_traces[vid] = list(rec.get("edges") or [])
+        return route_schedule, departure_schedule, edge_traces
 
     @staticmethod
     def _build_record_path(base_path: str) -> str:
@@ -322,6 +329,31 @@ class RouteReplay:
     def has_departure_schedule(self) -> bool:
         """Whether the loaded replay log contains explicit departure-release events."""
         return bool(self._departure_schedule)
+
+    def record_edge_trace(self, veh_id: str, edges: List[str]) -> None:
+        """Log the complete sequence of edges a vehicle actually traversed.
+
+        Written once per vehicle (at arrival or simulation end).  In replay mode,
+        the edge trace is loaded by ``_load_schedule`` and used to set the vehicle's
+        route to the exact edge sequence from the original run.
+
+        Args:
+            veh_id: Vehicle ID.
+            edges: Ordered list of SUMO edge IDs the vehicle crossed.
+        """
+        self._write_jsonl({
+            "event": "edge_trace",
+            "veh_id": str(veh_id),
+            "edges": list(edges),
+        })
+
+    def get_edge_trace(self, veh_id: str) -> Optional[List[str]]:
+        """Return the recorded edge trace for a vehicle, or ``None``."""
+        return self._edge_traces.get(str(veh_id))
+
+    def has_edge_traces(self) -> bool:
+        """Whether the loaded replay log contains edge-trace events."""
+        return bool(self._edge_traces)
 
     def record_metric_snapshot(
         self,
