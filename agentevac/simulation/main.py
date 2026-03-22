@@ -3214,6 +3214,23 @@ def process_pending_departures(step_idx: int):
                     parsed=_dest_decision.model_dump() if hasattr(_dest_decision, "model_dump") else None,
                     error=None,
                 )
+                # Record in metrics so departure destination counts in destination_choice_share.
+                _dest_selected = next((x for x in _d_menu if x.get("idx") == _dest_idx), None)
+                metrics.record_decision_snapshot(
+                    agent_id=vid,
+                    sim_t_s=float(sim_t),
+                    decision_round=int(decision_round_counter),
+                    state={
+                        "control_mode": CONTROL_MODE,
+                        "action_status": "departure_destination_choice",
+                        "selected_option": {
+                            "name": DESTINATION_LIBRARY[_dest_idx]["name"],
+                            "dest_edge": DESTINATION_LIBRARY[_dest_idx]["edge"],
+                        } if 0 <= _dest_idx < len(DESTINATION_LIBRARY) else {},
+                    },
+                    choice_idx=_dest_idx,
+                    action_status="departure_destination_choice",
+                )
             except Exception as _dest_err:
                 print(f"[WARN] Departure destination choice failed for {vid}: {_dest_err}")
                 replay.record_llm_dialog(
@@ -3415,8 +3432,13 @@ def process_vehicles(step_idx: int):
     decision_round_counter += 1
     decision_round = decision_round_counter
 
-    # Decide for a subset (optional throttle)
-    to_control = vehicles_list[:MAX_VEHICLES_PER_DECISION]
+    # Decide for a subset (round-robin throttle so every agent eventually gets a turn)
+    _n_veh = len(vehicles_list)
+    if _n_veh <= MAX_VEHICLES_PER_DECISION:
+        to_control = vehicles_list
+    else:
+        _rr_offset = ((decision_round - 1) * MAX_VEHICLES_PER_DECISION) % _n_veh
+        to_control = (vehicles_list[_rr_offset:] + vehicles_list[:_rr_offset])[:MAX_VEHICLES_PER_DECISION]
     pending_agent_ids = [str(vid) for (vid, *_rest) in SPAWN_EVENTS if vid not in spawned]
     if EVENTS_ENABLED:
         events.emit(
