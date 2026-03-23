@@ -4801,6 +4801,8 @@ finally:
     except Exception:
         pass
     try:
+        for _aid, _astate in AGENT_STATES.items():
+            metrics.record_agent_profile(_aid, _astate.profile)
         metrics_path = metrics.close()
         if metrics_path:
             print(f"[METRICS] summary_path={metrics_path}")

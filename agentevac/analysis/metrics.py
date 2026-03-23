@@ -81,6 +81,8 @@ class RunMetricsCollector:
         self._conflict_by_agent_sum: Dict[str, float] = {}
         self._conflict_by_agent_count: Dict[str, int] = {}
 
+        self._agent_profiles: Dict[str, Dict[str, float]] = {}
+
     @staticmethod
     def _timestamped_path(base_path: str) -> str:
         """Generate a unique timestamped output path by appending ``YYYYMMDD_HHMMSS``.
@@ -211,6 +213,39 @@ class RunMetricsCollector:
         self._choice_counts[label] = self._choice_counts.get(label, 0) + 1
         if state.get("control_mode") == "destination":
             self._final_destination_by_agent[agent_id] = str(choice_name)
+
+    def record_agent_profile(self, agent_id: str, profile: Dict[str, float]) -> None:
+        """Record the sampled profile parameters for an agent.
+
+        Only the first call per agent_id is stored (profiles are immutable).
+
+        Args:
+            agent_id: Vehicle ID.
+            profile: Dict of psychological parameter values (theta_trust, theta_r, etc.).
+        """
+        if not self.enabled:
+            return
+        if agent_id not in self._agent_profiles:
+            self._agent_profiles[agent_id] = dict(profile)
+
+    def export_agent_profiles(self) -> Optional[str]:
+        """Write per-agent profiles to a JSON file alongside the metrics file.
+
+        Returns:
+            The path of the written file, or ``None`` if metrics are disabled or no path is set.
+        """
+        if not self.enabled or not self.path:
+            return None
+        if not self._agent_profiles:
+            return None
+        base = Path(self.path)
+        profiles_path = base.with_name(base.stem.replace("run_metrics", "agent_profiles", 1) + base.suffix)
+        if str(profiles_path) == self.path:
+            profiles_path = base.with_name(base.stem + "_profiles" + base.suffix)
+        with open(profiles_path, "w", encoding="utf-8") as fh:
+            json.dump(self._agent_profiles, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write("\n")
+        return str(profiles_path)
 
     def record_exposure_sample(
         self,
@@ -439,11 +474,12 @@ class RunMetricsCollector:
         return target
 
     def close(self) -> Optional[str]:
-        """Flush and export metrics; typically called at simulation end.
+        """Flush and export metrics and agent profiles; typically called at simulation end.
 
         Returns:
             The path of the written metrics file, or ``None``.
         """
         if not self.enabled:
             return None
+        self.export_agent_profiles()
         return self.export_run_metrics()
