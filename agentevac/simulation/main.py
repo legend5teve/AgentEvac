@@ -358,6 +358,7 @@ TTL_ROUNDS = int(os.getenv("TTL_ROUNDS", "10"))
 AGENT_HISTORY_ROUNDS = int(os.getenv("AGENT_HISTORY_ROUNDS", "8"))
 FIRE_TREND_EPS_M = float(os.getenv("FIRE_TREND_EPS_M", "20.0"))
 AGENT_HISTORY_ROUTE_HEAD_EDGES = int(os.getenv("AGENT_HISTORY_ROUTE_HEAD_EDGES", "5"))
+VISUAL_LOOKAHEAD_EDGES = int(os.getenv("VISUAL_LOOKAHEAD_EDGES", "3"))
 INFO_SIGMA = float(os.getenv("INFO_SIGMA", "40.0"))
 DIST_REF_M = float(os.getenv("DIST_REF_M", "500.0"))
 INFO_DELAY_S = float(os.getenv("INFO_DELAY_S", "0.0"))
@@ -3793,6 +3794,38 @@ def process_vehicles(step_idx: int):
                         baseline_time_s=baseline_time_s,
                     )
                     item.update(info)
+
+                # --- Visual fire observation for no_notice mode ---
+                # En-route agents can see fire on the first few edges ahead of
+                # their current position.  This adds a penalty to the CURRENT
+                # destination's menu item so _observation_based_exposure picks
+                # it up, making the agent more likely to switch shelters.
+                if SCENARIO_MODE == "no_notice":
+                    _cur_dest_idx = veh_last_choice.get(vehicle)
+                    if _cur_dest_idx is not None and _cur_dest_idx >= 0:
+                        try:
+                            _rp = rinfo.index(roadid)
+                            _ahead = rinfo[_rp + 1:]
+                        except ValueError:
+                            _ahead = []
+                        _head = _ahead[:VISUAL_LOOKAHEAD_EDGES]
+                        if _head:
+                            _vb = 0
+                            _vm = float("inf")
+                            for _he in _head:
+                                _hb, _hr, _hm = edge_risk(_he)
+                                _vb += int(_hb)
+                                if _hm < _vm:
+                                    _vm = _hm
+                            for item in menu:
+                                if item.get("idx") == _cur_dest_idx and item.get("reachable"):
+                                    item["visual_blocked_edges"] = _vb
+                                    item["visual_min_margin_m"] = (
+                                        None if not math.isfinite(_vm)
+                                        else round(_vm, 2)
+                                    )
+                                    break
+
                 annotate_menu_with_expected_utility(
                     menu,
                     mode="destination",

@@ -134,6 +134,13 @@ def _observation_based_exposure(
     prioritise ``p_danger`` (0.7) over ``p_risky`` (0.3) to maintain consistency
     with the severity weighting in ``_expected_exposure``.
 
+    When ``visual_blocked_edges`` or ``visual_min_margin_m`` keys are present on
+    the menu item, a **visual fire observation penalty** is added.  This models a
+    no-notice agent who can see fire on the first few edges ahead of their current
+    position.  The penalty uses the same weights as ``_expected_exposure``
+    (``blocked_edges * 8.0`` + margin lookup) so that a visually blocked route
+    gets a large score increase, prompting the agent to switch shelters.
+
     Args:
         menu_item: A destination or route dict.
         belief: The agent's current Bayesian belief dict.
@@ -155,7 +162,17 @@ def _observation_based_exposure(
     length_factor = len_edges * 0.15
     uncertainty_penalty = max(0.0, 1.0 - confidence) * 0.75
 
-    return hazard_level * length_factor + uncertainty_penalty
+    # Visual fire observation penalty: present only for the agent's current
+    # destination when fire is detected on the first few route-head edges.
+    visual_penalty = 0.0
+    if "visual_blocked_edges" in menu_item:
+        visual_blocked = _num(menu_item.get("visual_blocked_edges"), 0.0)
+        visual_min_margin = menu_item.get("visual_min_margin_m")
+        visual_penalty = visual_blocked * 8.0
+        if visual_min_margin is not None:
+            visual_penalty += _effective_margin_penalty(visual_min_margin)
+
+    return hazard_level * length_factor + uncertainty_penalty + visual_penalty
 
 
 def _expected_exposure(

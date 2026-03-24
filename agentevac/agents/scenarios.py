@@ -210,6 +210,9 @@ def filter_menu_for_scenario(
                     "idx", "name", "dest_edge", "reachable", "note",
                     "travel_time_s_fastest_path", "len_edges_fastest_path",
                     "expected_utility", "utility_components",
+                    # Visual fire observation fields (agent can see fire on
+                    # the first few edges of their current route).
+                    "visual_blocked_edges", "visual_min_margin_m",
                 }
             else:
                 keep_keys = {

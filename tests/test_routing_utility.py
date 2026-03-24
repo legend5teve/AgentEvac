@@ -223,6 +223,78 @@ class TestObservationBasedExposure:
         )
 
 
+class TestVisualFireObservationPenalty:
+    """Tests for the visual fire observation penalty in _observation_based_exposure."""
+
+    def _base_item(self):
+        return {"len_edges": 5}
+
+    def test_no_visual_fields_gives_zero_visual_penalty(self):
+        item = self._base_item()
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(item, belief, psych)
+        # Without visual fields, exposure is purely belief-based.
+        item2 = {**self._base_item(), "visual_blocked_edges": 0}
+        with_visual = _observation_based_exposure(item2, belief, psych)
+        # No blocked edges and no margin → no margin penalty added, so equal.
+        assert base == pytest.approx(with_visual)
+
+    def test_visual_blocked_edges_adds_heavy_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        no_block = _observation_based_exposure(self._base_item(), belief, psych)
+        blocked = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 2, "visual_min_margin_m": 0.0},
+            belief, psych,
+        )
+        # 2 * 8.0 + margin_penalty(0) = 16 + 5.0 = 21.0 extra
+        assert blocked > no_block + 20.0
+
+    def test_visual_close_margin_adds_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        close_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": 500.0},
+            belief, psych,
+        )
+        # margin 500 < 1200 → margin_penalty = 3.0
+        assert close_fire == pytest.approx(base + 3.0)
+
+    def test_visual_far_margin_adds_small_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        far_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": 8000.0},
+            belief, psych,
+        )
+        # margin 8000 > 5000 → margin_penalty = 0.15
+        assert far_fire == pytest.approx(base + 0.15)
+
+    def test_visual_none_margin_no_margin_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        no_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": None},
+            belief, psych,
+        )
+        # No blocked edges and margin is None → no extra penalty.
+        assert no_fire == pytest.approx(base)
+
+    def test_visual_penalty_only_affects_item_with_fields(self):
+        """Items without visual fields should not be affected."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        item_current = {**self._base_item(), "visual_blocked_edges": 2, "visual_min_margin_m": 0.0}
+        item_other = self._base_item()
+        e_current = _observation_based_exposure(item_current, belief, psych)
+        e_other = _observation_based_exposure(item_other, belief, psych)
+        assert e_current > e_other
+
+
 class TestAnnotateMenuScenarioParam:
     """Tests that the scenario parameter selects the correct exposure function."""
 
