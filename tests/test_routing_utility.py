@@ -222,6 +222,40 @@ class TestObservationBasedExposure:
             _observation_based_exposure(item_b, belief, psych)
         )
 
+    def test_travel_time_preferred_over_edge_count(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Same edge count, different travel times → different exposure.
+        fast = {"len_edges": 10, "travel_time_s_fastest_path": 240.0}
+        slow = {"len_edges": 10, "travel_time_s_fastest_path": 1500.0}
+        assert _observation_based_exposure(slow, belief, psych) > _observation_based_exposure(fast, belief, psych)
+
+    def test_travel_time_ignores_edge_count(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Different edge counts but same travel time → same exposure.
+        item_a = {"len_edges": 5, "travel_time_s_fastest_path": 600.0}
+        item_b = {"len_edges": 50, "travel_time_s_fastest_path": 600.0}
+        assert _observation_based_exposure(item_a, belief, psych) == pytest.approx(
+            _observation_based_exposure(item_b, belief, psych)
+        )
+
+    def test_longer_travel_time_gives_more_exposure(self):
+        belief = {"p_safe": 0.1, "p_risky": 0.3, "p_danger": 0.6}
+        psych = {"perceived_risk": 0.5, "confidence": 0.5}
+        short = _observation_based_exposure({"travel_time_s_fastest_path": 240.0}, belief, psych)
+        long = _observation_based_exposure({"travel_time_s_fastest_path": 1500.0}, belief, psych)
+        assert long > short
+
+    def test_edge_count_fallback_when_no_travel_time(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Without travel_time_s_fastest_path, falls back to len_edges.
+        item = {"len_edges": 10}
+        exposure = _observation_based_exposure(item, belief, psych)
+        # length_factor = 10 * 0.15 = 1.5
+        assert exposure > 0.0
+
 
 class TestVisualFireObservationPenalty:
     """Tests for the visual fire observation penalty in _observation_based_exposure."""

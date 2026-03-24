@@ -123,16 +123,19 @@ def _observation_based_exposure(
     Used in the ``no_notice`` scenario where agents have only their own noisy
     observation of the current edge.  Without per-route fire metrics (risk_sum,
     blocked_edges, min_margin_m), exposure is derived from the agent's general
-    belief state scaled by route length:
+    belief state scaled by estimated travel duration:
 
         hazard_level = 0.3 * p_risky + 0.7 * p_danger + 0.4 * perceived_risk
-        length_factor = len_edges * 0.15
+        length_factor = travel_time_minutes * 0.3   (or len_edges * 0.15 fallback)
         exposure = hazard_level * length_factor + uncertainty_penalty
 
     Longer routes are penalised more because a longer route means more time
-    spent driving through a potentially hazardous environment.  The coefficients
-    prioritise ``p_danger`` (0.7) over ``p_risky`` (0.3) to maintain consistency
-    with the severity weighting in ``_expected_exposure``.
+    spent driving through a potentially hazardous environment.  Travel time
+    (from SUMO ``findRoute``) is preferred over edge count because edge
+    lengths vary widely; a 2 km highway segment should count more than a
+    50 m residential street.  The coefficients prioritise ``p_danger`` (0.7)
+    over ``p_risky`` (0.3) to maintain consistency with the severity
+    weighting in ``_expected_exposure``.
 
     When ``visual_blocked_edges`` or ``visual_min_margin_m`` keys are present on
     the menu item, a **visual fire observation penalty** is added.  This models a
@@ -155,11 +158,15 @@ def _observation_based_exposure(
     confidence = _num(psychology.get("confidence"), 0.0)
 
     hazard_level = 0.3 * p_risky + 0.7 * p_danger + 0.4 * perceived_risk
-    len_edges = _num(
-        menu_item.get("len_edges", menu_item.get("len_edges_fastest_path")),
-        1.0,
-    )
-    length_factor = len_edges * 0.15
+    travel_time_s = menu_item.get("travel_time_s_fastest_path")
+    if travel_time_s is not None:
+        length_factor = _num(travel_time_s, 60.0) / 60.0 * 0.3
+    else:
+        len_edges = _num(
+            menu_item.get("len_edges", menu_item.get("len_edges_fastest_path")),
+            1.0,
+        )
+        length_factor = len_edges * 0.15
     uncertainty_penalty = max(0.0, 1.0 - confidence) * 0.75
 
     # Visual fire observation penalty: present only for the agent's current
