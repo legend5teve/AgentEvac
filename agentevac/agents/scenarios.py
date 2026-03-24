@@ -194,6 +194,8 @@ def filter_menu_for_scenario(
 
     for item in menu:
         out = dict(item)
+        # Strip internal fields that should never reach the LLM prompt.
+        out.pop("_fastest_path_edges", None)
         if not cfg["official_route_guidance_visible"]:
             # Remove advisory labels and authority source produced by the operator briefing logic.
             out.pop("advisory", None)
@@ -213,6 +215,9 @@ def filter_menu_for_scenario(
                     # Visual fire observation fields (agent can see fire on
                     # the first few edges of their current route).
                     "visual_blocked_edges", "visual_min_margin_m",
+                    # Proximity fire perception fields (agent is close enough
+                    # to a fire to assess its impact on each candidate route).
+                    "proximity_blocked_edges", "proximity_min_margin_m",
                 }
             else:
                 keep_keys = {

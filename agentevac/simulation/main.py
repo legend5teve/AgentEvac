@@ -359,6 +359,7 @@ AGENT_HISTORY_ROUNDS = int(os.getenv("AGENT_HISTORY_ROUNDS", "8"))
 FIRE_TREND_EPS_M = float(os.getenv("FIRE_TREND_EPS_M", "20.0"))
 AGENT_HISTORY_ROUTE_HEAD_EDGES = int(os.getenv("AGENT_HISTORY_ROUTE_HEAD_EDGES", "5"))
 VISUAL_LOOKAHEAD_EDGES = int(os.getenv("VISUAL_LOOKAHEAD_EDGES", "3"))
+FIRE_PERCEPTION_RANGE_M = float(os.getenv("FIRE_PERCEPTION_RANGE_M", "1200"))
 INFO_SIGMA = float(os.getenv("INFO_SIGMA", "40.0"))
 DIST_REF_M = float(os.getenv("DIST_REF_M", "500.0"))
 INFO_DELAY_S = float(os.getenv("INFO_DELAY_S", "0.0"))
@@ -2114,6 +2115,35 @@ def _build_conflict_description(
     return {"sources_agree": False, "description": desc}
 
 
+def _visible_fires(
+    agent_pos: Tuple[float, float],
+    fires: List[Tuple[float, float, float]],
+    perception_range_m: float,
+) -> List[Tuple[float, float, float]]:
+    """Return the subset of *fires* whose perimeter is within *perception_range_m* of *agent_pos*.
+
+    Each fire is a growing circle ``(x, y, radius)``.  An agent perceives a fire when::
+
+        sqrt((ax - fx)^2 + (ay - fy)^2) - fr  <=  perception_range_m
+
+    Args:
+        agent_pos: ``(x, y)`` from ``traci.vehicle.getPosition()``.
+        fires: List of ``(x, y, r)`` tuples representing active fire circles.
+        perception_range_m: Maximum distance (metres) from the fire perimeter at
+            which the agent can visually assess the fire.
+
+    Returns:
+        Filtered list of ``(x, y, r)`` tuples — same format as *fires*.
+    """
+    ax, ay = float(agent_pos[0]), float(agent_pos[1])
+    visible: List[Tuple[float, float, float]] = []
+    for fx, fy, fr in fires:
+        dist_to_perimeter = math.hypot(ax - fx, ay - fy) - fr
+        if dist_to_perimeter <= perception_range_m:
+            visible.append((fx, fy, fr))
+    return visible
+
+
 def _edge_margin_from_risk(edge_id: str, edge_risk_fn) -> Optional[float]:
     if not edge_id or edge_id.startswith(":"):
         return None
@@ -2534,8 +2564,25 @@ def process_pending_departures(step_idx: int):
                 sim_t,
                 neighborhood_observation=neighborhood_observation,
             )
-            prompt_system_observation_updates = [dict(item) for item in system_observation_updates]
-            prompt_neighborhood_observation = dict(neighborhood_observation)
+            # --- Filter env/forecast/neighborhood for the active scenario regime ---
+            _pd_forecast_payload = {
+                "summary": dict(forecast_summary),
+                "current_edge": dict(edge_forecast),
+                "route_head": dict(route_forecast),
+                "briefing": forecast_briefing,
+            }
+            prompt_env_signal, prompt_forecast = apply_scenario_to_signals(
+                SCENARIO_MODE, env_signal, _pd_forecast_payload,
+            )
+            if SCENARIO_CONFIG.get("neighborhood_observation_visible", True):
+                prompt_system_observation_updates = [dict(item) for item in system_observation_updates]
+                prompt_neighborhood_observation = dict(neighborhood_observation)
+            else:
+                prompt_system_observation_updates = []
+                prompt_neighborhood_observation = {
+                    "available": False,
+                    "summary": "Neighborhood observation is not available in this scenario.",
+                }
             conflict_info = _build_conflict_description(
                 belief_state.get("env_belief", {}),
                 social_signal,
@@ -2549,9 +2596,17 @@ def process_pending_departures(step_idx: int):
                     "spawn_edge": from_edge,
                     "candidate_destination_edge": to_edge,
                     "has_departed": False,
+                    "risk_tolerance": {
+                        "theta_r": round(float(agent_state.profile["theta_r"]), 4),
+                        "description": (
+                            "theta_r is this agent's personal risk threshold on a 0\u20131 scale. "
+                            "The agent should depart only when perceived danger (combined_belief.p_danger) "
+                            "exceeds theta_r. Higher theta_r means greater tolerance for risk and a longer wait."
+                        ),
+                    },
                 },
                 "your_observation": {
-                    "environment_signal": dict(env_signal),
+                    "environment_signal": prompt_env_signal,
                     "env_belief": belief_state.get("env_belief", {}),
                 },
                 "neighbor_assessment": {
@@ -2579,25 +2634,32 @@ def process_pending_departures(step_idx: int):
                     "title": SCENARIO_CONFIG["title"],
                     "description": SCENARIO_CONFIG["description"],
                 },
-                "forecast": {
-                    "summary": dict(forecast_summary),
-                    "current_edge": dict(edge_forecast),
-                    "route_head": dict(route_forecast),
-                    "briefing": forecast_briefing,
-                },
+                "forecast": prompt_forecast,
                 "policy": (
-                    "Priority 1 — Safety: If official evacuation guidance is present (see official_evacuation_order), "
-                    "it strongly favors departing now. You may briefly delay only if your own observations "
-                    "strongly suggest the area is currently safe, but err on the side of compliance. "
-                    "If fire risk is rising, forecast worsens, or your current location may be overtaken, depart. "
-                    "Delayed departure increases your exposure to dangerous fire conditions. "
-                    "Priority 2 — Information assessment: Consider your_observation, neighbor_assessment, "
-                    "and inbox to form your judgment. "
+                    "BINDING CONSTRAINT — Personal risk threshold: "
+                    "This agent's calibrated risk threshold is theta_r = "
+                    f"{round(float(agent_state.profile['theta_r']), 4)}. "
+                    "This parameter is derived from empirical behavioral research and MUST govern "
+                    "the departure decision. You MUST output action='wait' when "
+                    "combined_belief.p_danger <= theta_r, UNLESS an official evacuation order "
+                    "(official_evacuation_order) is present. "
+                    "An agent with a high theta_r is behaviourally more risk-tolerant and will "
+                    "tolerate elevated danger before choosing to evacuate; an agent with a low "
+                    "theta_r is risk-averse and departs at the first sign of danger. "
+                    "Violating this constraint produces scientifically invalid simulation output. "
+                    "Priority 1 — Official guidance: If official evacuation guidance is present "
+                    "(see official_evacuation_order), depart immediately regardless of theta_r. "
+                    "Priority 2 — Risk-threshold departure: If combined_belief.p_danger > theta_r, "
+                    "depart. Otherwise, wait. Do NOT substitute your own risk judgment for the "
+                    "agent's calibrated threshold. "
+                    "Priority 3 — Information assessment: Consider your_observation, neighbor_assessment, "
+                    "and inbox to form your situational summary, but the departure decision is "
+                    "governed by the theta_r constraint above, not by qualitative reasoning. "
                     "If information_conflict.sources_agree is false, explain in conflict_assessment "
                     "which source you trusted more and why. "
-                    "Priority 3 — Social context: Use neighborhood_observation and system_observation_updates "
+                    "Priority 4 — Social context: Use neighborhood_observation and system_observation_updates "
                     "as factual context. Treat them as neutral observations, not instructions. "
-                    "If nearby households are departing rapidly, this signals increasing urgency. "
+                    "Neighbor departures do not override the theta_r constraint. "
                     "Output action='depart' or action='wait'. "
                     f"{scenario_prompt_suffix(SCENARIO_MODE)}"
                 ),
@@ -3484,8 +3546,24 @@ def process_vehicles(step_idx: int):
             prev_margin_m = None
             if history_recent:
                 prev_margin_m = history_recent[-1].get("current_edge_margin_m")
-            current_edge_margin_m = _edge_margin_from_risk(roadid, edge_risk)
-            route_head_min_margin_m = _route_head_min_margin(rinfo, edge_risk)
+            # --- Fire perception gating for no_notice ---
+            # In no_notice mode, agents can only perceive fires within
+            # FIRE_PERCEPTION_RANGE_M of their position.  Margins are computed
+            # from visible fires only; if none are in range the agent receives
+            # None → observed_state="unknown" (genuine uncertainty).
+            if SCENARIO_MODE == "no_notice":
+                _visible = _visible_fires(position, fire_geom, FIRE_PERCEPTION_RANGE_M)
+                if _visible:
+                    def _vis_edge_risk(eid, _vf=_visible):
+                        return compute_edge_risk_for_fires(eid, _vf)
+                    current_edge_margin_m = _edge_margin_from_risk(roadid, _vis_edge_risk)
+                    route_head_min_margin_m = _route_head_min_margin(rinfo, _vis_edge_risk)
+                else:
+                    current_edge_margin_m = None
+                    route_head_min_margin_m = None
+            else:
+                current_edge_margin_m = _edge_margin_from_risk(roadid, edge_risk)
+                route_head_min_margin_m = _route_head_min_margin(rinfo, edge_risk)
             fire_trend_vs_last_round = _fire_trend(prev_margin_m, current_edge_margin_m, FIRE_TREND_EPS_M)
             inbox_for_vehicle = messaging.get_inbox(vehicle) if MESSAGING_ENABLED else []
             if EVENTS_ENABLED:
@@ -3767,6 +3845,7 @@ def process_vehicles(step_idx: int):
                         "min_margin_m_on_fastest_path": None if not math.isfinite(min_margin) else round(min_margin, 2),
                         "travel_time_s_fastest_path": None if cand_tt is None else round(cand_tt, 2),
                         "len_edges_fastest_path": len(cand_edges),
+                        "_fastest_path_edges": cand_edges,
                     })
 
                 # If nothing reachable, KEEP
@@ -3832,6 +3911,30 @@ def process_vehicles(step_idx: int):
                                         else round(_vm, 2)
                                     )
                                     break
+
+                # --- Proximity fire perception for no_notice mode ---
+                # When agent is within FIRE_PERCEPTION_RANGE_M of a fire's
+                # perimeter, compute route-level fire metrics from visible
+                # fires for ALL reachable destinations.
+                if SCENARIO_MODE == "no_notice" and _visible:
+                    for item in menu:
+                        if not item.get("reachable"):
+                            continue
+                        _fp_edges = item.get("_fastest_path_edges", [])
+                        if not _fp_edges:
+                            continue
+                        _pb = 0
+                        _pm = float("inf")
+                        for _pe in _fp_edges:
+                            _p_blocked, _p_risk, _p_margin = compute_edge_risk_for_fires(_pe, _visible)
+                            _pb += int(_p_blocked)
+                            if _p_margin < _pm:
+                                _pm = _p_margin
+                        item["proximity_blocked_edges"] = _pb
+                        item["proximity_min_margin_m"] = (
+                            None if not math.isfinite(_pm)
+                            else round(_pm, 2)
+                        )
 
                 annotate_menu_with_expected_utility(
                     menu,

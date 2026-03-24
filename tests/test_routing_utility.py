@@ -392,3 +392,89 @@ class TestAnnotateMenuScenarioParam:
         assert menu_default[0]["expected_utility"] == pytest.approx(
             menu_explicit[0]["expected_utility"]
         )
+
+
+class TestProximityFirePerceptionPenalty:
+    """Tests for the proximity fire perception penalty in _observation_based_exposure."""
+
+    def _base_item(self):
+        return {"len_edges": 5}
+
+    def test_no_proximity_fields_gives_no_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        # Without proximity fields, no extra penalty.
+        item2 = {**self._base_item(), "proximity_blocked_edges": 0}
+        with_prox = _observation_based_exposure(item2, belief, psych)
+        assert base == pytest.approx(with_prox)
+
+    def test_proximity_blocked_edges_adds_heavy_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        no_block = _observation_based_exposure(self._base_item(), belief, psych)
+        blocked = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 3, "proximity_min_margin_m": 0.0},
+            belief, psych,
+        )
+        # 3 * 8.0 + margin_penalty(0) = 24.0 + 5.0 = 29.0 extra
+        assert blocked > no_block + 28.0
+
+    def test_proximity_close_margin_adds_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        close_fire = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 800.0},
+            belief, psych,
+        )
+        # margin 800 <= 1200 → margin_penalty = 3.0
+        assert close_fire == pytest.approx(base + 3.0)
+
+    def test_proximity_far_margin_adds_small_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        far = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 6000.0},
+            belief, psych,
+        )
+        # margin 6000 > 5000 → margin_penalty = 0.15
+        assert far == pytest.approx(base + 0.15)
+
+    def test_proximity_none_margin_no_margin_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        no_margin = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": None},
+            belief, psych,
+        )
+        assert no_margin == pytest.approx(base)
+
+    def test_proximity_applies_to_all_items(self):
+        """Proximity data should affect any item that has the fields, unlike visual
+        which is limited to the current destination only."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        item_safe = {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 8000.0}
+        item_dangerous = {**self._base_item(), "proximity_blocked_edges": 2, "proximity_min_margin_m": 0.0}
+        e_safe = _observation_based_exposure(item_safe, belief, psych)
+        e_dangerous = _observation_based_exposure(item_dangerous, belief, psych)
+        assert e_dangerous > e_safe
+
+    def test_proximity_and_visual_penalties_stack(self):
+        """When both visual and proximity fields are present, both penalties apply."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        both = _observation_based_exposure(
+            {
+                **self._base_item(),
+                "visual_blocked_edges": 1, "visual_min_margin_m": 0.0,
+                "proximity_blocked_edges": 1, "proximity_min_margin_m": 0.0,
+            },
+            belief, psych,
+        )
+        # visual: 1*8 + 5.0 = 13.0; proximity: 1*8 + 5.0 = 13.0; total extra = 26.0
+        assert both == pytest.approx(base + 26.0)

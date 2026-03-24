@@ -179,7 +179,19 @@ def _observation_based_exposure(
         if visual_min_margin is not None:
             visual_penalty += _effective_margin_penalty(visual_min_margin)
 
-    return hazard_level * length_factor + uncertainty_penalty + visual_penalty
+    # Proximity fire perception penalty: present on ALL reachable destinations
+    # when the agent is within perception range of a fire.  Uses the same
+    # weights as _expected_exposure (blocked * 8.0 + margin_penalty) so that
+    # routes passing near visible fires are strongly deprioritised.
+    proximity_penalty = 0.0
+    if "proximity_blocked_edges" in menu_item:
+        prox_blocked = _num(menu_item.get("proximity_blocked_edges"), 0.0)
+        prox_min_margin = menu_item.get("proximity_min_margin_m")
+        proximity_penalty = prox_blocked * 8.0
+        if prox_min_margin is not None:
+            proximity_penalty += _effective_margin_penalty(prox_min_margin)
+
+    return hazard_level * length_factor + uncertainty_penalty + visual_penalty + proximity_penalty
 
 
 def _expected_exposure(
