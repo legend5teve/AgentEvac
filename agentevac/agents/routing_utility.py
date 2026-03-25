@@ -63,12 +63,12 @@ def _effective_margin_penalty(min_margin_m: Any) -> float:
     model uncertainty: even routes with no fire currently nearby may become risky.
 
     Thresholds:
-        - ∞ (no fire detected)      → 0.25  (nominal baseline)
-        - ≤ 0 m (inside fire)       → 5.0   (highest risk)
-        - ≤ 100 m (very close)      → 3.0
-        - ≤ 300 m (near)            → 1.5
-        - ≤ 700 m (buffered)        → 0.6
-        - > 700 m (clear)           → 0.15  (lowest non-zero risk)
+        - ∞ (no fire detected)       → 0.25  (nominal baseline)
+        - ≤ 0 m (inside fire)        → 5.0   (highest risk)
+        - ≤ 1200 m (very close)      → 3.0
+        - ≤ 2500 m (near)            → 1.5
+        - ≤ 5000 m (buffered)        → 0.6
+        - > 5000 m (clear)           → 0.15  (lowest non-zero risk)
 
     Args:
         min_margin_m: Minimum fire margin in metres along the route; may be ``None``
@@ -82,11 +82,11 @@ def _effective_margin_penalty(min_margin_m: Any) -> float:
         return 0.25
     if margin <= 0.0:
         return 5.0
-    if margin <= 100.0:
+    if margin <= 1200.0:
         return 3.0
-    if margin <= 300.0:
+    if margin <= 2500.0:
         return 1.5
-    if margin <= 700.0:
+    if margin <= 5000.0:
         return 0.6
     return 0.15
 
@@ -123,16 +123,26 @@ def _observation_based_exposure(
     Used in the ``no_notice`` scenario where agents have only their own noisy
     observation of the current edge.  Without per-route fire metrics (risk_sum,
     blocked_edges, min_margin_m), exposure is derived from the agent's general
-    belief state scaled by route length:
+    belief state scaled by estimated travel duration:
 
         hazard_level = 0.3 * p_risky + 0.7 * p_danger + 0.4 * perceived_risk
-        length_factor = len_edges * 0.15
+        length_factor = travel_time_minutes * 0.3   (or len_edges * 0.15 fallback)
         exposure = hazard_level * length_factor + uncertainty_penalty
 
     Longer routes are penalised more because a longer route means more time
-    spent driving through a potentially hazardous environment.  The coefficients
-    prioritise ``p_danger`` (0.7) over ``p_risky`` (0.3) to maintain consistency
-    with the severity weighting in ``_expected_exposure``.
+    spent driving through a potentially hazardous environment.  Travel time
+    (from SUMO ``findRoute``) is preferred over edge count because edge
+    lengths vary widely; a 2 km highway segment should count more than a
+    50 m residential street.  The coefficients prioritise ``p_danger`` (0.7)
+    over ``p_risky`` (0.3) to maintain consistency with the severity
+    weighting in ``_expected_exposure``.
+
+    When ``visual_blocked_edges`` or ``visual_min_margin_m`` keys are present on
+    the menu item, a **visual fire observation penalty** is added.  This models a
+    no-notice agent who can see fire on the first few edges ahead of their current
+    position.  The penalty uses the same weights as ``_expected_exposure``
+    (``blocked_edges * 8.0`` + margin lookup) so that a visually blocked route
+    gets a large score increase, prompting the agent to switch shelters.
 
     Args:
         menu_item: A destination or route dict.
@@ -148,14 +158,40 @@ def _observation_based_exposure(
     confidence = _num(psychology.get("confidence"), 0.0)
 
     hazard_level = 0.3 * p_risky + 0.7 * p_danger + 0.4 * perceived_risk
-    len_edges = _num(
-        menu_item.get("len_edges", menu_item.get("len_edges_fastest_path")),
-        1.0,
-    )
-    length_factor = len_edges * 0.15
+    travel_time_s = menu_item.get("travel_time_s_fastest_path")
+    if travel_time_s is not None:
+        length_factor = _num(travel_time_s, 60.0) / 60.0 * 0.3
+    else:
+        len_edges = _num(
+            menu_item.get("len_edges", menu_item.get("len_edges_fastest_path")),
+            1.0,
+        )
+        length_factor = len_edges * 0.15
     uncertainty_penalty = max(0.0, 1.0 - confidence) * 0.75
 
-    return hazard_level * length_factor + uncertainty_penalty
+    # Visual fire observation penalty: present only for the agent's current
+    # destination when fire is detected on the first few route-head edges.
+    visual_penalty = 0.0
+    if "visual_blocked_edges" in menu_item:
+        visual_blocked = _num(menu_item.get("visual_blocked_edges"), 0.0)
+        visual_min_margin = menu_item.get("visual_min_margin_m")
+        visual_penalty = visual_blocked * 8.0
+        if visual_min_margin is not None:
+            visual_penalty += _effective_margin_penalty(visual_min_margin)
+
+    # Proximity fire perception penalty: present on ALL reachable destinations
+    # when the agent is within perception range of a fire.  Uses the same
+    # weights as _expected_exposure (blocked * 8.0 + margin_penalty) so that
+    # routes passing near visible fires are strongly deprioritised.
+    proximity_penalty = 0.0
+    if "proximity_blocked_edges" in menu_item:
+        prox_blocked = _num(menu_item.get("proximity_blocked_edges"), 0.0)
+        prox_min_margin = menu_item.get("proximity_min_margin_m")
+        proximity_penalty = prox_blocked * 8.0
+        if prox_min_margin is not None:
+            proximity_penalty += _effective_margin_penalty(prox_min_margin)
+
+    return hazard_level * length_factor + uncertainty_penalty + visual_penalty + proximity_penalty
 
 
 def _expected_exposure(

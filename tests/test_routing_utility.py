@@ -115,7 +115,7 @@ class TestAnnotateMenuWithExpectedUtility:
                 "name": f"shelter_{i}",
                 "risk_sum": float(i),
                 "blocked_edges": 0,
-                "min_margin_m": 500.0,
+                "min_margin_m": 6000.0,
                 "travel_time_s_fastest_path": 300.0,
                 "reachable": reachable,
             }
@@ -164,7 +164,7 @@ class TestAnnotateMenuWithExpectedUtility:
     def test_higher_risk_gets_lower_utility(self):
         menu = [
             {"idx": 0, "name": "safe", "risk_sum": 0.0, "blocked_edges": 0,
-             "min_margin_m": 1000.0, "travel_time_s_fastest_path": 300.0, "reachable": True},
+             "min_margin_m": 8000.0, "travel_time_s_fastest_path": 300.0, "reachable": True},
             {"idx": 1, "name": "risky", "risk_sum": 5.0, "blocked_edges": 2,
              "min_margin_m": 10.0, "travel_time_s_fastest_path": 300.0, "reachable": True},
         ]
@@ -221,6 +221,112 @@ class TestObservationBasedExposure:
         assert _observation_based_exposure(item_a, belief, psych) == pytest.approx(
             _observation_based_exposure(item_b, belief, psych)
         )
+
+    def test_travel_time_preferred_over_edge_count(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Same edge count, different travel times → different exposure.
+        fast = {"len_edges": 10, "travel_time_s_fastest_path": 240.0}
+        slow = {"len_edges": 10, "travel_time_s_fastest_path": 1500.0}
+        assert _observation_based_exposure(slow, belief, psych) > _observation_based_exposure(fast, belief, psych)
+
+    def test_travel_time_ignores_edge_count(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Different edge counts but same travel time → same exposure.
+        item_a = {"len_edges": 5, "travel_time_s_fastest_path": 600.0}
+        item_b = {"len_edges": 50, "travel_time_s_fastest_path": 600.0}
+        assert _observation_based_exposure(item_a, belief, psych) == pytest.approx(
+            _observation_based_exposure(item_b, belief, psych)
+        )
+
+    def test_longer_travel_time_gives_more_exposure(self):
+        belief = {"p_safe": 0.1, "p_risky": 0.3, "p_danger": 0.6}
+        psych = {"perceived_risk": 0.5, "confidence": 0.5}
+        short = _observation_based_exposure({"travel_time_s_fastest_path": 240.0}, belief, psych)
+        long = _observation_based_exposure({"travel_time_s_fastest_path": 1500.0}, belief, psych)
+        assert long > short
+
+    def test_edge_count_fallback_when_no_travel_time(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        # Without travel_time_s_fastest_path, falls back to len_edges.
+        item = {"len_edges": 10}
+        exposure = _observation_based_exposure(item, belief, psych)
+        # length_factor = 10 * 0.15 = 1.5
+        assert exposure > 0.0
+
+
+class TestVisualFireObservationPenalty:
+    """Tests for the visual fire observation penalty in _observation_based_exposure."""
+
+    def _base_item(self):
+        return {"len_edges": 5}
+
+    def test_no_visual_fields_gives_zero_visual_penalty(self):
+        item = self._base_item()
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(item, belief, psych)
+        # Without visual fields, exposure is purely belief-based.
+        item2 = {**self._base_item(), "visual_blocked_edges": 0}
+        with_visual = _observation_based_exposure(item2, belief, psych)
+        # No blocked edges and no margin → no margin penalty added, so equal.
+        assert base == pytest.approx(with_visual)
+
+    def test_visual_blocked_edges_adds_heavy_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        no_block = _observation_based_exposure(self._base_item(), belief, psych)
+        blocked = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 2, "visual_min_margin_m": 0.0},
+            belief, psych,
+        )
+        # 2 * 8.0 + margin_penalty(0) = 16 + 5.0 = 21.0 extra
+        assert blocked > no_block + 20.0
+
+    def test_visual_close_margin_adds_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        close_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": 500.0},
+            belief, psych,
+        )
+        # margin 500 < 1200 → margin_penalty = 3.0
+        assert close_fire == pytest.approx(base + 3.0)
+
+    def test_visual_far_margin_adds_small_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        far_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": 8000.0},
+            belief, psych,
+        )
+        # margin 8000 > 5000 → margin_penalty = 0.15
+        assert far_fire == pytest.approx(base + 0.15)
+
+    def test_visual_none_margin_no_margin_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        no_fire = _observation_based_exposure(
+            {**self._base_item(), "visual_blocked_edges": 0, "visual_min_margin_m": None},
+            belief, psych,
+        )
+        # No blocked edges and margin is None → no extra penalty.
+        assert no_fire == pytest.approx(base)
+
+    def test_visual_penalty_only_affects_item_with_fields(self):
+        """Items without visual fields should not be affected."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        item_current = {**self._base_item(), "visual_blocked_edges": 2, "visual_min_margin_m": 0.0}
+        item_other = self._base_item()
+        e_current = _observation_based_exposure(item_current, belief, psych)
+        e_other = _observation_based_exposure(item_other, belief, psych)
+        assert e_current > e_other
 
 
 class TestAnnotateMenuScenarioParam:
@@ -286,3 +392,89 @@ class TestAnnotateMenuScenarioParam:
         assert menu_default[0]["expected_utility"] == pytest.approx(
             menu_explicit[0]["expected_utility"]
         )
+
+
+class TestProximityFirePerceptionPenalty:
+    """Tests for the proximity fire perception penalty in _observation_based_exposure."""
+
+    def _base_item(self):
+        return {"len_edges": 5}
+
+    def test_no_proximity_fields_gives_no_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        # Without proximity fields, no extra penalty.
+        item2 = {**self._base_item(), "proximity_blocked_edges": 0}
+        with_prox = _observation_based_exposure(item2, belief, psych)
+        assert base == pytest.approx(with_prox)
+
+    def test_proximity_blocked_edges_adds_heavy_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        no_block = _observation_based_exposure(self._base_item(), belief, psych)
+        blocked = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 3, "proximity_min_margin_m": 0.0},
+            belief, psych,
+        )
+        # 3 * 8.0 + margin_penalty(0) = 24.0 + 5.0 = 29.0 extra
+        assert blocked > no_block + 28.0
+
+    def test_proximity_close_margin_adds_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        close_fire = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 800.0},
+            belief, psych,
+        )
+        # margin 800 <= 1200 → margin_penalty = 3.0
+        assert close_fire == pytest.approx(base + 3.0)
+
+    def test_proximity_far_margin_adds_small_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        far = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 6000.0},
+            belief, psych,
+        )
+        # margin 6000 > 5000 → margin_penalty = 0.15
+        assert far == pytest.approx(base + 0.15)
+
+    def test_proximity_none_margin_no_margin_penalty(self):
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        no_margin = _observation_based_exposure(
+            {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": None},
+            belief, psych,
+        )
+        assert no_margin == pytest.approx(base)
+
+    def test_proximity_applies_to_all_items(self):
+        """Proximity data should affect any item that has the fields, unlike visual
+        which is limited to the current destination only."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        item_safe = {**self._base_item(), "proximity_blocked_edges": 0, "proximity_min_margin_m": 8000.0}
+        item_dangerous = {**self._base_item(), "proximity_blocked_edges": 2, "proximity_min_margin_m": 0.0}
+        e_safe = _observation_based_exposure(item_safe, belief, psych)
+        e_dangerous = _observation_based_exposure(item_dangerous, belief, psych)
+        assert e_dangerous > e_safe
+
+    def test_proximity_and_visual_penalties_stack(self):
+        """When both visual and proximity fields are present, both penalties apply."""
+        belief = _neutral_belief()
+        psych = _psychology()
+        base = _observation_based_exposure(self._base_item(), belief, psych)
+        both = _observation_based_exposure(
+            {
+                **self._base_item(),
+                "visual_blocked_edges": 1, "visual_min_margin_m": 0.0,
+                "proximity_blocked_edges": 1, "proximity_min_margin_m": 0.0,
+            },
+            belief, psych,
+        )
+        # visual: 1*8 + 5.0 = 13.0; proximity: 1*8 + 5.0 = 13.0; total extra = 26.0
+        assert both == pytest.approx(base + 26.0)

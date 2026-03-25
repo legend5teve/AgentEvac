@@ -194,6 +194,8 @@ def filter_menu_for_scenario(
 
     for item in menu:
         out = dict(item)
+        # Strip internal fields that should never reach the LLM prompt.
+        out.pop("_fastest_path_edges", None)
         if not cfg["official_route_guidance_visible"]:
             # Remove advisory labels and authority source produced by the operator briefing logic.
             out.pop("advisory", None)
@@ -210,6 +212,12 @@ def filter_menu_for_scenario(
                     "idx", "name", "dest_edge", "reachable", "note",
                     "travel_time_s_fastest_path", "len_edges_fastest_path",
                     "expected_utility", "utility_components",
+                    # Visual fire observation fields (agent can see fire on
+                    # the first few edges of their current route).
+                    "visual_blocked_edges", "visual_min_margin_m",
+                    # Proximity fire perception fields (agent is close enough
+                    # to a fire to assess its impact on each candidate route).
+                    "proximity_blocked_edges", "proximity_min_margin_m",
                 }
             else:
                 keep_keys = {
@@ -238,11 +246,10 @@ def scenario_prompt_suffix(mode: str) -> str:
     cfg = load_scenario_config(mode)
     if cfg["mode"] == "no_notice":
         return (
-            "This is a no-notice wildfire scenario: do not assume official route instructions exist. "
-            "Rely mainly on your_observation, inbox messages, and your own caution. "
-            "Do NOT invent official instructions. Base decisions on environmental cues (smoke/flames/visibility), "
-            "your current hazard or forecast inputs if provided, and peer-to-peer messages. Seek credible info when available "
-            ", and choose conservative actions if uncertain."
+            "This is a no-notice wildfire scenario: no official warnings or route instructions exist yet. "
+            "Do NOT invent official instructions. "
+            "Base decisions on your_observation.environment_signal, inbox messages, "
+            "and neighborhood_observation. Choose conservative actions if uncertain."
         )
     if cfg["mode"] == "alert_guided":
         return (

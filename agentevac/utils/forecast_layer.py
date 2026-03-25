@@ -52,12 +52,12 @@ def _margin_band(margin_m: Optional[float]) -> str:
     readable description of how close a fire is to a road edge.
 
     Thresholds:
-        - ``None``   : "unknown"
-        - ≤ 0 m      : "inside_predicted_fire"  (fire has overtaken the edge)
-        - ≤ 100 m    : "very_close"
-        - ≤ 300 m    : "near"
-        - ≤ 700 m    : "buffered"
-        - > 700 m    : "clear"
+        - ``None``    : "unknown"
+        - ≤ 0 m       : "inside_predicted_fire"  (fire has overtaken the edge)
+        - ≤ 1200 m    : "very_close"
+        - ≤ 2500 m    : "near"
+        - ≤ 5000 m    : "buffered"
+        - > 5000 m    : "clear"
 
     Args:
         margin_m: Minimum distance (metres) from fire edge to road edge.
@@ -69,11 +69,11 @@ def _margin_band(margin_m: Optional[float]) -> str:
         return "unknown"
     if margin_m <= 0.0:
         return "inside_predicted_fire"
-    if margin_m <= 100.0:
+    if margin_m <= 1200.0:
         return "very_close"
-    if margin_m <= 300.0:
+    if margin_m <= 2500.0:
         return "near"
-    if margin_m <= 700.0:
+    if margin_m <= 5000.0:
         return "buffered"
     return "clear"
 
@@ -264,21 +264,22 @@ def render_forecast_briefing(
     uncertainty = str(belief.get("uncertainty_bucket") or "High")
 
     if blocked_edges > 0:
-        route_clause = f"{blocked_edges} route-head segment(s) may be blocked"
+        blocked_word = "segment" if blocked_edges == 1 else "segments"
+        route_clause = f"route ahead has {blocked_edges} blocked {blocked_word}"
     else:
-        route_clause = f"route head looks {route_band}"
+        route_clause = f"route ahead looks {route_band}"
 
     if edge_forecast.get("blocked"):
-        edge_clause = "your current edge may be overtaken"
+        edge_clause = "your current location may be overtaken by fire"
     else:
-        edge_clause = f"your current edge looks {edge_band}"
+        edge_clause = f"your current location looks {edge_band}"
 
-    # Select a tone word based on belief danger probability and uncertainty.
+    # Select a tone based on belief danger probability and uncertainty.
     if p_danger >= 0.5:
-        tone = "Forecast suggests the threat is building"
+        tone = "Conditions are worsening"
     elif uncertainty == "High":
-        tone = "Forecast is uncertain, but conditions may tighten"
+        tone = "Conditions are uncertain and may tighten"
     else:
-        tone = "Forecast suggests a manageable window"
+        tone = "Conditions appear manageable for now"
 
-    return f"{tone} within {horizon_s}s: {edge_clause}, and {route_clause}."
+    return f"{tone} (forecast horizon {horizon_s}s): {edge_clause}, and {route_clause}."

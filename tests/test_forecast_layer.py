@@ -12,7 +12,7 @@ from agentevac.utils.forecast_layer import (
 
 def _safe_edge_risk_fn(edge_id):
     """Always-safe: not blocked, zero risk, large margin."""
-    return (False, 0.0, 1000.0)
+    return (False, 0.0, 8000.0)
 
 
 def _dangerous_edge_risk_fn(edge_id):
@@ -96,11 +96,11 @@ class TestEstimateEdgeForecastRisk:
         assert result["band"] == "very_close"
 
     def test_near_band(self):
-        result = estimate_edge_forecast_risk("e", lambda _: (False, 0.05, 200.0))
+        result = estimate_edge_forecast_risk("e", lambda _: (False, 0.05, 1800.0))
         assert result["band"] == "near"
 
     def test_buffered_band(self):
-        result = estimate_edge_forecast_risk("e", lambda _: (False, 0.01, 500.0))
+        result = estimate_edge_forecast_risk("e", lambda _: (False, 0.01, 3500.0))
         assert result["band"] == "buffered"
 
     def test_edge_id_forwarded_to_risk_fn(self):
@@ -187,14 +187,14 @@ class TestRenderForecastBriefing:
             "v1", self._forecast(), self._belief_high_danger(),
             self._edge_safe(), self._route_safe()
         )
-        assert "building" in result or "threat" in result.lower()
+        assert "worsening" in result.lower()
 
     def test_high_uncertainty_low_danger_uses_uncertain_tone(self):
         result = render_forecast_briefing(
             "v1", self._forecast(), self._belief_uncertain(),
             self._edge_safe(), self._route_safe()
         )
-        assert "uncertain" in result.lower() or "tighten" in result.lower()
+        assert "uncertain" in result.lower()
 
     def test_blocked_current_edge_mentions_overtaken(self):
         result = render_forecast_briefing(
