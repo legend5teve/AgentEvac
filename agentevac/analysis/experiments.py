@@ -419,6 +419,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--messaging", choices=["on", "off"], default="on")
     parser.add_argument("--sumo-seed", type=int, default=None,
                         help="SUMO random seed (integer). Overrides SUMO_SEED env var.")
+    parser.add_argument(
+        "--map",
+        default=os.getenv("MAP_NAME", "lytton"),
+        help="Map config directory name under configs/ (default: lytton).",
+    )
     return parser.parse_args()
 
 
@@ -442,6 +447,7 @@ def main() -> int:
         run_mode=args.run_mode,
         timeout_s=args.timeout_s,
         sumo_seed=args.sumo_seed,
+        map_name=args.map,
     )
     exported = export_experiment_results(results, output_dir=args.output_dir)
     print(f"[EXPERIMENTS] cases={len(results)}")

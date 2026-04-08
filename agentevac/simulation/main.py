@@ -334,7 +334,7 @@ WEB_DASHBOARD_MAX_EVENTS = int(
 if WEB_DASHBOARD_ENABLED and not EVENTS_ENABLED:
     # Dashboard is event-driven, so force event stream on when dashboard is requested.
     EVENTS_ENABLED = True
-OVERLAYS_ENABLED = _parse_bool(os.getenv("OVERLAYS_ENABLED", "1"), True)
+OVERLAYS_ENABLED = _parse_bool(os.getenv("OVERLAYS_ENABLED", "0"), True)
 if CLI_ARGS.overlays is not None:
     OVERLAYS_ENABLED = (CLI_ARGS.overlays == "on")
 OVERLAY_MAX_LABEL_CHARS = int(os.getenv("OVERLAY_MAX_LABEL_CHARS", str(CLI_ARGS.overlay_max_label_chars or 80)))
@@ -1446,6 +1446,7 @@ traci.start(Sumo_config)
 replay = RouteReplay(RUN_MODE, REPLAY_LOG_PATH)
 events = LiveEventStream(EVENTS_ENABLED, EVENTS_LOG_PATH, EVENTS_STDOUT)
 metrics = RunMetricsCollector(METRICS_ENABLED, METRICS_LOG_PATH, RUN_MODE)
+metrics.total_agents = len(SPAWN_EVENTS)
 params_log_path = write_run_parameter_log(
     PARAMS_LOG_PATH,
     _run_parameter_payload(),
@@ -1544,6 +1545,23 @@ total_speed = 0
 
 client = OpenAI()  # uses OPENAI_API_KEY
 MAX_CONCURRENT_LLM = int(os.environ.get("MAX_CONCURRENT_LLM", "20"))
+
+_token_lock = threading.Lock()
+_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "llm_calls": 0}
+
+
+def _record_usage(resp):
+    """Extract token usage from an OpenAI response and accumulate."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return
+    with _token_lock:
+        _token_usage["input_tokens"] += getattr(usage, "input_tokens", 0)
+        _token_usage["output_tokens"] += getattr(usage, "output_tokens", 0)
+        _token_usage["total_tokens"] += getattr(usage, "total_tokens", 0)
+        _token_usage["llm_calls"] += 1
+
+
 veh_last_choice: Dict[str, int] = {}
 decision_round_counter = 0
 _edge_trace: Dict[str, List[str]] = {}  # veh_id -> ordered edges traversed
@@ -2595,6 +2613,7 @@ def process_pending_departures(step_idx: int):
             else:
                 try:
                     resp = _ctx["_future"].result(timeout=60)
+                    _record_usage(resp)
                     predeparture_decision = resp.output_parsed
                     llm_action_raw = str(getattr(predeparture_decision, "action", "") or "").strip().lower()
                     llm_decision_reason = getattr(predeparture_decision, "reason", None)
@@ -3088,6 +3107,7 @@ def process_pending_departures(step_idx: int):
         if "_dest_future" in _spawn:
             try:
                 _dest_resp = _spawn["_dest_future"].result(timeout=60)
+                _record_usage(_dest_resp)
                 _dest_decision = _dest_resp.output_parsed
                 _dest_idx = int(_dest_decision.choice_index)
                 _d_reachable = _spawn["_dest_reachable"]
@@ -3997,6 +4017,7 @@ def process_vehicles(step_idx: int):
                             ],
                             text_format=DecisionModel,
                         )
+                        _record_usage(resp)
                         decision = resp.output_parsed
                         choice_idx = int(decision.choice_index)
                         raw_choice_idx = choice_idx
@@ -4461,6 +4482,7 @@ def process_vehicles(step_idx: int):
                             ],
                             text_format=DecisionModel,
                         )
+                        _record_usage(resp)
                         decision = resp.output_parsed
                         choice_idx = int(decision.choice_index)
                         raw_choice_idx = choice_idx
@@ -4852,6 +4874,7 @@ finally:
     try:
         for _aid, _astate in AGENT_STATES.items():
             metrics.record_agent_profile(_aid, _astate.profile)
+        metrics.token_usage = dict(_token_usage)
         metrics_path = metrics.close()
         if metrics_path:
             print(f"[METRICS] summary_path={metrics_path}")
