@@ -17,3 +17,9 @@ Research_Proposal_0317.pptx
 sumo/halifax.net.xml
 sumo/Halifax_buildings.xml
 paper/
+
+# Licensed mobility data. Local-only, never commit or upload.
+GPS_data/
+**/Halifax_export.csv
+**/Halifax_reduced_export.csv
+**/Halifax_reduced_export.csv.gz

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Reconstructed 28 May 2023 Upper Tantallon emergency-alert schedule and RCMP door-to-door timeline for the halifax_3town layout. Drives the M1 alert-event engine (E0 reconstruction) and the M3 door-to-door channel. See docs/jason_0611_response_assessment.md (M1/M2/M3 design) and docs/halifax_reconstruction_inputs.md (full provenance).",
+    "description": "Reconstructed 28 May 2023 Upper Tantallon emergency-alert schedule and RCMP door-to-door timeline for the halifax_3town layout. Drives the M1 alert-event engine (E0 reconstruction) and the M3 door-to-door channel. See docs/build_plan/ (M1/M2/M3 design) and docs/halifax_reconstruction_inputs.md (full provenance).",
     "clock": {
       "anchor": "ignition (ALARM 1, deck and woods on fire at Juneberry Lane, 15:28 on 28 May 2023)",
       "sim_t0_equals": "15:28:00 ADT",

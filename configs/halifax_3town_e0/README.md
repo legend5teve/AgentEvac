@@ -2,7 +2,7 @@
 
 E0 reconstruction config for the 28 May 2023 Upper Tantallon wildfire, derived from `halifax_3town`. Same network, spawns, destinations, and routes. The differences are the record-calibrated fire timing and the alert schedule. Do not edit `halifax_3town`, it stays as the original campaign config.
 
-References and provenance: `docs/halifax_e0_event_timeline.md` (calibration section) and `docs/halifax_reconstruction_inputs.md`. Design: `docs/jason_0611_response_assessment.md`.
+References and provenance: `docs/halifax_e0_event_timeline.md` (calibration section) and `docs/halifax_reconstruction_inputs.md`. Design: `docs/build_plan/`.
 
 ## What changed vs halifax_3town
 
