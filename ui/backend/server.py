@@ -171,6 +171,28 @@ class ConsoleApp:
         self.shutdown_requested = True
         return 200, {"ok": True, "ended_run": active}
 
+    def package_fires(self, package_id: str) -> Optional[Dict[str, Any]]:
+        """A package's fire origins, so a draft can take a record-exact set unchanged.
+
+        Placing a fire by clicking cannot reproduce coordinates the record fixes to the
+        metre, and the 13 Halifax sources are HRFE-exact, so authoring a reconstruction
+        needs to copy them rather than redraw them.
+        """
+        source = authoring.CONFIGS_DIR / package_id / "fires.json"
+        if not source.is_file():
+            return None
+        try:
+            with open(source, encoding="utf-8") as handle:
+                content = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        fires = list(content.get("sources") or []) + list(content.get("events") or [])
+        return {"package": package_id, "count": len(fires), "fires": fires}
+
+    def package_authoring(self, package_id: str) -> Optional[Dict[str, Any]]:
+        """An existing package read back into the shape the Author view draws."""
+        return authoring.read_package(package_id)
+
     def package_buildings(self, package_id: str) -> Optional[Dict[str, Any]]:
         """The building layer a selection is drawn against, without the road geometry."""
         index = authoring.load_buildings_index(package_id)
@@ -324,6 +346,37 @@ def make_handler(app: ConsoleApp):
                     self._json({"error": "no_building_layer", "package": package_id}, 404)
                 else:
                     self._json(payload)
+                return
+            if path.startswith("/api/packages/") and path.endswith("/authoring"):
+                package_id = unquote(path[len("/api/packages/"):-len("/authoring")])
+                payload = app.package_authoring(package_id)
+                if payload is None:
+                    self._json({
+                        "error": "not_reopenable",
+                        "package": package_id,
+                        "detail": f"{package_id} has no building-based spawn selection to read",
+                    }, 404)
+                else:
+                    self._json(payload)
+                return
+            if path.startswith("/api/packages/") and path.endswith("/fires"):
+                package_id = unquote(path[len("/api/packages/"):-len("/fires")])
+                payload = app.package_fires(package_id)
+                if payload is None:
+                    self._json({"error": "no_fires", "package": package_id}, 404)
+                else:
+                    self._json(payload)
+                return
+            if path.startswith("/api/packages/") and path.endswith("/record-areas"):
+                package_id = unquote(path[len("/api/packages/"):-len("/record-areas")])
+                asset = ASSETS_DIR / "record_areas" / f"{package_id}.json"
+                if _serve_file(self, asset):
+                    return
+                self._json({
+                    "error": "record_areas_not_built",
+                    "detail": f"no record areas for {package_id}",
+                    "hint": "Run python -m ui.tools.build_record_areas to place its households.",
+                }, 404)
                 return
             if path.startswith("/api/packages/") and path.endswith("/preview"):
                 package_id = unquote(path[len("/api/packages/"):-len("/preview")])

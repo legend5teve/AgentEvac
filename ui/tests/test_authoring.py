@@ -100,6 +100,91 @@ _HOUSEHOLDS = [
 ]
 
 
+class TestReadPackage:
+    """Reading a written package back into the shape the authoring view draws.
+
+    ``spawns.json`` repeats a building id once per agent, so the per-building count the
+    view holds is recovered by counting occurrences. Getting that wrong would silently
+    change a package's population when it is reopened.
+    """
+
+    def _write(self, root, name, files):
+        directory = root / name
+        directory.mkdir(parents=True)
+        for filename, content in files.items():
+            with open(directory / filename, "w", encoding="utf-8") as handle:
+                json.dump(content, handle)
+        return directory
+
+    @pytest.fixture
+    def package(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(authoring, "CONFIGS_DIR", tmp_path)
+        self._write(tmp_path, "p", {
+            "spawns.json": {"groups": [
+                {"edge": "e0", "count": 3, "building_id": ["b1", "b1", "b2"]},
+                {"edge": "e1", "count": 1, "building_id": ["b3"]},
+            ]},
+            "alerts.json": {
+                "areas": {
+                    "first": {"label": "First", "building_ids": ["b1", "b2"], "color": "#CC79A7"},
+                    "second": {"label": "Second", "building_ids": ["b3"]},
+                },
+                "schedule": [
+                    {"id": "EA-1", "issue_time_s": 6300, "areas": ["first"],
+                     "hazard_text": "Go now.", "comfort_centre": "Black Point"},
+                    {"id": "EA-2", "issue_time_s": 9660, "areas": ["second"]},
+                ],
+            },
+            "fires.json": {"sources": [{"id": "f1", "x": 1.0, "y": 2.0, "t0": 0.0,
+                                        "r0": 30.0, "growth_m_per_s": 0.3}]},
+        })
+        return authoring.read_package("p")
+
+    def test_a_repeated_building_becomes_one_household_with_its_count(self, package):
+        assert package["households"] == [
+            {"building_id": "b1", "count": 2},
+            {"building_id": "b2", "count": 1},
+            {"building_id": "b3", "count": 1},
+        ]
+
+    def test_an_area_carries_its_order_back(self, package):
+        first = next(a for a in package["areas"] if a["name"] == "first")
+        assert first["wave"] == "EA-1"
+        assert first["issue_time_s"] == 6300
+        assert first["hazard_text"] == "Go now."
+        assert first["comfort_centre"] == "Black Point"
+        assert first["building_ids"] == ["b1", "b2"]
+
+    def test_a_stored_colour_is_kept_and_a_missing_one_is_filled(self, package):
+        by_name = {a["name"]: a for a in package["areas"]}
+        assert by_name["first"]["color"] == "#CC79A7"
+        # Written before colour was recorded, so it takes one from the palette.
+        assert by_name["second"]["color"].startswith("#")
+
+    def test_fires_come_back(self, package):
+        assert [f["id"] for f in package["fires"]] == ["f1"]
+
+    def test_an_edge_list_area_is_reported_as_unredrawable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(authoring, "CONFIGS_DIR", tmp_path)
+        self._write(tmp_path, "q", {
+            "spawns.json": {"groups": [{"edge": "e0", "count": 1, "building_id": ["b1"]}]},
+            "alerts.json": {"areas": {"legacy": {"edges": ["e0"]}}, "schedule": []},
+            "fires.json": {"sources": []},
+        })
+        assert authoring.read_package("q")["areas_without_buildings"] == ["legacy"]
+
+    def test_a_package_without_spawns_is_not_reopenable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(authoring, "CONFIGS_DIR", tmp_path)
+        (tmp_path / "empty").mkdir()
+        assert authoring.read_package("empty") is None
+
+    def test_the_detailed_spawn_format_is_not_reopenable(self, tmp_path, monkeypatch):
+        # It carries no building ids, so there is nothing the building-based view can draw.
+        monkeypatch.setattr(authoring, "CONFIGS_DIR", tmp_path)
+        self._write(tmp_path, "r", {"spawns.json": [{"veh_id": "v1", "spawn_edge": "e0"}]})
+        assert authoring.read_package("r") is None
+
+
 class TestAlertComposition:
     def test_households_resolve_to_their_edges(self):
         problems, warnings = [], []
@@ -110,6 +195,44 @@ class TestAlertComposition:
         assert alerts["areas"]["area_a"]["edges"] == ["e0", "e1"]
         assert alerts["areas"]["area_a"]["building_ids"] == ["b1", "b3"]
         assert problems == []
+
+    def test_area_colour_is_carried_when_given(self):
+        # The colour is how the console drew the area.  Recording it means a written
+        # package can be reopened and still look the way it was authored.
+        alerts = authoring.compose_alerts(
+            [{"name": "area_a", "building_ids": ["b1"], "color": "#CC79A7"}],
+            [], _INDEX, _HOUSEHOLDS, [], [],
+        )
+        assert alerts["areas"]["area_a"]["color"] == "#CC79A7"
+
+    def test_area_without_a_colour_carries_none(self):
+        alerts = authoring.compose_alerts(
+            [{"name": "area_a", "building_ids": ["b1"]}], [], _INDEX, _HOUSEHOLDS, [], [],
+        )
+        assert "color" not in alerts["areas"]["area_a"]
+
+    def test_comfort_centre_is_carried(self):
+        # EA-1 named the Black Point centre, so a destination is part of the historical
+        # order and has to survive into the package.
+        alerts = authoring.compose_alerts(
+            [{"name": "area_a", "building_ids": ["b1"]}],
+            [{"id": "EA-1", "issue_time_s": 6300, "areas": ["area_a"],
+              "comfort_centre": "Black Point"}],
+            _INDEX, _HOUSEHOLDS, [], [],
+        )
+        assert alerts["schedule"][0]["comfort_centre"] == "Black Point"
+
+    def test_one_event_may_name_several_areas(self):
+        # EA-3 named Haliburton Hills and Glen Arbour in a single broadcast.
+        alerts = authoring.compose_alerts(
+            [{"name": "haliburton_hills", "building_ids": ["b1"]},
+             {"name": "glen_arbour", "building_ids": ["b3"]}],
+            [{"id": "EA-3", "issue_time_s": 15180,
+              "areas": ["haliburton_hills", "glen_arbour"]}],
+            _INDEX, _HOUSEHOLDS, [], [],
+        )
+        assert len(alerts["schedule"]) == 1
+        assert alerts["schedule"][0]["areas"] == ["haliburton_hills", "glen_arbour"]
 
     def test_a_building_that_is_not_a_household_is_dropped(self):
         problems, warnings = [], []

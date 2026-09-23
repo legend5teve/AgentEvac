@@ -21,13 +21,18 @@ export const AUTHOR_SOURCES = {
 export const BUILDING_STATE = {
   /** Selected as a household. */
   household: 'hh',
-  /** Inside the alert area. */
+  /** Inside an alert area. */
   area: 'area',
+  /** The colour of the area this building belongs to, absent when it belongs to none. */
+  areaColor: 'areaColor',
   /** No road within range, so no household can spawn here. */
   stranded: 'stranded',
   /** Holds more than one agent, so it stands out among the ordinary houses. */
   multi: 'multi',
 } as const
+
+/** Drawn when a building is in an area whose colour did not reach the feature. */
+export const AREA_FALLBACK_COLOR = COLORS.ordered
 
 export function buildAuthorStyle(): StyleSpecification {
   return {
@@ -70,9 +75,12 @@ export function buildAuthorStyle(): StyleSpecification {
         type: 'fill',
         source: AUTHOR_SOURCES.buildings,
         paint: {
+          // An ordered building takes its own area's colour, which is what lets several
+          // waves be told apart on one map.
           'fill-color': [
             'case',
-            ['get', BUILDING_STATE.area], COLORS.ordered,
+            ['get', BUILDING_STATE.area],
+            ['coalesce', ['get', BUILDING_STATE.areaColor], AREA_FALLBACK_COLOR],
             ['get', BUILDING_STATE.household], COLORS.evacuating,
             ['get', BUILDING_STATE.stranded], '#2A313A',
             '#49535F',
@@ -107,7 +115,8 @@ export function buildAuthorStyle(): StyleSpecification {
         paint: {
           'line-color': [
             'case',
-            ['get', BUILDING_STATE.area], '#FFD08A',
+            ['get', BUILDING_STATE.area],
+            ['coalesce', ['get', BUILDING_STATE.areaColor], AREA_FALLBACK_COLOR],
             ['get', BUILDING_STATE.household], '#8FC5E8',
             '#5A6472',
           ],
@@ -155,7 +164,7 @@ export function buildAuthorStyle(): StyleSpecification {
 /** A building footprint, or a small square when the bundle carries centroids only. */
 export function buildingFeature(
   building: { id: string; lon: number; lat: number; edge: string | null; poly?: [number, number][] },
-  state: { household: boolean; area: boolean; count?: number },
+  state: { household: boolean; area: boolean; count?: number; areaColor?: string | null },
 ): GeoJSON.Feature {
   const ring: [number, number][] = building.poly?.length
     ? [...building.poly]
@@ -170,6 +179,7 @@ export function buildingFeature(
       bid: building.id,
       [BUILDING_STATE.household]: state.household,
       [BUILDING_STATE.area]: state.area,
+      [BUILDING_STATE.areaColor]: state.areaColor ?? null,
       [BUILDING_STATE.stranded]: !building.edge,
       [BUILDING_STATE.multi]: (state.count ?? 1) > 1,
       count: state.count ?? 0,

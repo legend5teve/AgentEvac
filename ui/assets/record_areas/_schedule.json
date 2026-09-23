@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "description": "The 28 May 2023 Upper Tantallon emergency-alert schedule, as broadcast, with the community each alert names. Drives the 'Load record areas' preset in the operator console and the E0 reconstruction schedule.",
+    "clock": {
+      "anchor": "ignition (ALARM 1, deck and woods on fire at Juneberry Lane, 15:28 ADT on 28 May 2023)",
+      "sim_t0_equals": "15:28:00 ADT",
+      "e911_call_at_s": -75,
+      "required_sim_end_time_s": 17460,
+      "recommended_sim_end_time_s": 28800
+    },
+    "sources": {
+      "issue_times": "HRFE Post Incident Analysis 240806rci01, Event Timeline, physical PDF pp.12-13",
+      "cross_check": "HRM After Action Report 231017rci05, timeline table, physical PDF p.10",
+      "ea4_areas": "The Coast, timeline of the Upper Tantallon wildfire. HRFE p.13 records the 20:19 update without its content.",
+      "community_geometry": "OpenStreetMap administrative boundaries, see _communities.geojson"
+    },
+    "note": "Haliburton Hills is the subdivision inside the Stillwater Lake community. Stillwater Lake was named in the internal evacuation requests at 16:41 (HRFE p.12) and 17:20 (HRM p.10) but in no broadcast, so its households are ordered at EA-3 under the Haliburton Hills name."
+  },
+
+  "schedule": [
+    {
+      "id": "EA-1",
+      "issue_time_s": 6300,
+      "wall_clock": "17:13:00",
+      "color": "#E69F00",
+      "instruction": "evacuate_now",
+      "channel": "wireless_emergency_alert",
+      "communities": ["Westwood Hills"],
+      "hazard_text": "Evacuation ordered for Westwood Hills subdivision, Upper Tantallon, Nova Scotia due to ongoing multiple structure and forest fire. All residents in Westwood Hills ordered to evacuate.",
+      "comfort_centre": "Black Point and Area Community Centre",
+      "routing_text": null,
+      "source": "HRFE 240806rci01 p.13 (17:13:00 NSEMO Emergency Alert Issued); HRM 231017rci05 p.10"
+    },
+    {
+      "id": "EA-2",
+      "issue_time_s": 9660,
+      "wall_clock": "18:09:00",
+      "color": "#F0E442",
+      "instruction": "evacuate_now",
+      "channel": "wireless_emergency_alert",
+      "communities": ["Yankeetown", "Highland Park", "Highland Park West", "Highland Park East"],
+      "hazard_text": "Fire now spread, and evacuation order is now issued for Yankeetown (Highland Park) subdivision, Hammonds Plains. The earlier order for Westwood Hills remains in effect.",
+      "comfort_centre": "Black Point and Area Community Centre",
+      "routing_text": null,
+      "source": "HRFE 240806rci01 p.13 (18:09:00 Update to NSEMO Emergency Alert); HRM 231017rci05 p.10"
+    },
+    {
+      "id": "EA-3",
+      "issue_time_s": 15180,
+      "wall_clock": "19:41:00",
+      "color": "#CC79A7",
+      "instruction": "evacuate_now",
+      "channel": "wireless_emergency_alert",
+      "communities": ["Halliburton Subdivision", "Glen Arbour", "Lucasville"],
+      "hazard_text": "Evacuation order extended to Haliburton Hills, Glen Arbour, Pockwock Rd, Whitehills subdivision, Lucasville Rd all the way to Sackville Dr. This is in addition to the earlier evacuation orders. Take your pets with you when you evacuate.",
+      "comfort_centre": null,
+      "routing_text": null,
+      "source": "HRFE 240806rci01 p.13 (19:41:00 Update to NSEMO Alert); HRM 231017rci05 p.10"
+    },
+    {
+      "id": "EA-4",
+      "issue_time_s": 17460,
+      "wall_clock": "20:19:00",
+      "color": "#8E5FA8",
+      "instruction": "evacuate_now",
+      "channel": "wireless_emergency_alert",
+      "communities": ["Voyageur Lakes", "Uplands Park", "Kingswood", "Kingswood North", "Indigo Shores"],
+      "hazard_text": "Evacuation order extended to Maplewood, Voyageur Way including St George Blvd and all side streets, McCabe Lake area and Indigo Shores. This is in addition to the earlier evacuation orders.",
+      "comfort_centre": null,
+      "routing_text": null,
+      "source": "HRFE 240806rci01 p.13 records the 20:19:00 update without its content. Areas from The Coast's timeline of the four alerts."
+    }
+  ],
+
+  "door_to_door": {
+    "start_time_s": 840,
+    "wall_clock": "15:42",
+    "communities": ["Westwood Hills"],
+    "cleared_by_s": 3600,
+    "source": "HRM 231017rci05 p.10 (15:42 RCMP began door-to-door evacuation of residents downwind in the path of fire); HRFE 240806rci01 p.12 (16:28:39 Command directs RCMP to have everyone leave subdivision)"
+  },
+
+  "internal_requests": [
+    {
+      "at_s": 4380,
+      "wall_clock": "16:41:02",
+      "communities": ["Yankeetown", "Stillwater Lake"],
+      "text": "On-Call Chief Officer phones HRM Emergency Management, to issue second evacuation notice for Yankeetown and Stillwater subdivisions.",
+      "source": "HRFE 240806rci01 p.12"
+    },
+    {
+      "at_s": 6720,
+      "wall_clock": "17:20",
+      "communities": ["Yankeetown", "Stillwater Lake"],
+      "text": "EOC Director notified and requested evacuation of Yankeetown and Stillwater sub-divisions.",
+      "source": "HRM 231017rci05 p.10"
+    }
+  ],
+
+  "unordered_palette": ["#56B4E9", "#009E73", "#C2255C", "#B26A00", "#7F8C99"]
+}

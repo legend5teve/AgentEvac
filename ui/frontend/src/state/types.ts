@@ -324,6 +324,8 @@ export interface DraftArea {
   name: string
   label?: string
   building_ids: string[]
+  /** How the area draws, carried into the package so it looks the way it was authored. */
+  color?: string
 }
 
 export interface DraftAlertEvent {
@@ -334,6 +336,65 @@ export interface DraftAlertEvent {
   channel: string
   hazard_text: string
   routing_text?: string | null
+  comfort_centre?: string | null
+}
+
+/**
+ * One community placed against the 2023 alert record, from
+ * `ui/assets/record_areas/<package>.json`.
+ *
+ * `wave` is null for a community inside the study area that no broadcast named, which is
+ * a real part of the record and not a gap in the data.
+ */
+export interface RecordArea {
+  name: string
+  label: string
+  community: string
+  building_ids: string[]
+  agents: number
+  edges: number
+  ordered: boolean
+  wave: string | null
+  issue_time_s: number | null
+  wall_clock?: string
+  color: string
+  instruction?: string
+  channel?: string
+  hazard_text?: string
+  comfort_centre?: string | null
+  note?: string
+}
+
+export interface RecordAreasPayload {
+  package: string
+  households: number
+  note?: string
+  areas: RecordArea[]
+}
+
+/** One alert area of an existing package, read back for editing. */
+export interface StoredArea {
+  name: string
+  label: string
+  color: string
+  building_ids: string[]
+  wave: string | null
+  issue_time_s: number | null
+  hazard_text: string
+  comfort_centre: string | null
+}
+
+/**
+ * An existing package read back into the shape the authoring view draws, from
+ * `GET /api/packages/<id>/authoring`.
+ */
+export interface StoredPackage {
+  package: string
+  households: { building_id: string; count: number }[]
+  areas: StoredArea[]
+  fires: DraftFire[]
+  /** Areas authored as edge lists, which carry no buildings the map can redraw. */
+  areas_without_buildings: string[]
 }
 
 /** The body POSTed to create a package. */

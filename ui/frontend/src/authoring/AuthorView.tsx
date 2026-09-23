@@ -2,20 +2,35 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../state/api'
 import { integer, simClock } from '../state/format'
 import { useConsole } from '../state/store'
-import type { AuthorBuilding, DraftFire, DraftValidation, Preview } from '../state/types'
+import type {
+  AuthorBuilding,
+  DraftFire,
+  DraftValidation,
+  Preview,
+  RecordAreasPayload,
+  StoredPackage,
+} from '../state/types'
 import { Badge, Button, EmptyState, Panel, StatTile } from '../ui/primitives'
 import { AuthorMap, lonLatToSim, type AuthorTool } from './AuthorMap'
 import {
-  addAreaMembers,
   addToSelection,
+  areaColorByBuilding,
+  areasFromPackage,
+  areasFromRecord,
+  AREA_PALETTE,
+  assignAreaMembers,
   buildDraft,
   buildingsInBox,
+  clearAreaMembers,
   fireRadiusAt,
   MAX_AGENTS_PER_BUILDING,
+  newArea,
   newFire,
+  orderedAreas,
   packageIdProblem,
-  pruneAreaMembers,
-  removeAreaMembers,
+  pruneAreas,
+  RECORD_WAVES,
+  removeArea,
   removeFromSelection,
   setAllCounts,
   setCount,
@@ -23,15 +38,18 @@ import {
   toggleAreaMember,
   toggleBuilding,
   totals,
+  unassignedAreas,
   unspawnableInBox,
+  updateArea,
   type Box,
+  type DraftAlertArea,
   type Household,
 } from './selection'
 
 const TOOLS: { id: AuthorTool; label: string; hint: string }[] = [
   { id: 'households', label: 'Households', hint: 'Drag a box over the buildings that should evacuate.' },
   { id: 'count', label: 'Agents', hint: 'Click a household to set how many agents it holds.' },
-  { id: 'area', label: 'Alert area', hint: 'Drag a box over the households the order covers.' },
+  { id: 'area', label: 'Alert areas', hint: 'Pick an area, then drag a box over the households its order covers.' },
   { id: 'fire', label: 'Fire origins', hint: 'Click where a fire starts, then set how it grows.' },
 ]
 
@@ -97,7 +115,7 @@ function CountStepper({
             key={preset}
             type="button"
             className={`flex-1 rounded border px-1 py-0.5 text-micro ${
-              count === preset ? 'border-accent text-ink-text' : 'border-ink-line text-ink-muted'
+              count === preset ? 'border-status-nominal text-ink-text' : 'border-ink-line text-ink-muted'
             }`}
             onClick={() => onChange(preset)}
           >
@@ -157,7 +175,7 @@ function FireEditor({
     onChange({ ...fire, [key]: Number.isFinite(value) ? value : 0 })
   }
   return (
-    <div className="rounded border border-line bg-surface-sunken p-2">
+    <div className="rounded border border-ink-line bg-ink-bg p-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-small font-medium">{fire.id}</span>
         <Button variant="ghost" onClick={onRemove}>
@@ -191,12 +209,180 @@ function FireEditor({
 }
 
 /**
+ * One alert area, with the order that covers it.
+ *
+ * The area being drawn into is the selected one, which is why the whole row is a button.
+ * Its colour is what the map paints its households, so the swatch is the legend.
+ */
+function AreaEditor({
+  area,
+  selected,
+  households,
+  onSelect,
+  onChange,
+  onRemove,
+  onOrderAll,
+  onClearMembers,
+}: {
+  area: DraftAlertArea
+  selected: boolean
+  households: number
+  onSelect: () => void
+  onChange: (patch: Partial<DraftAlertArea>) => void
+  onRemove: () => void
+  onOrderAll: () => void
+  onClearMembers: () => void
+}) {
+  const wave = RECORD_WAVES.find((w) => w.id === area.wave)
+  const unassigned = area.issueTimeS == null
+  const offRecord = wave != null && !unassigned && wave.issueTimeS !== area.issueTimeS
+  return (
+    <div className={`card-choice ${selected ? 'card-choice-on' : 'card-choice-off'} p-2`}>
+      {/* The whole row selects, because selecting is what says where a drag lands. The
+          name is text here and editable below, so the row has no interactive child
+          competing for the click. */}
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 text-left"
+        aria-pressed={selected}
+        onClick={onSelect}
+      >
+        <span
+          className="h-3.5 w-3.5 shrink-0 rounded-sm border border-ink-line"
+          style={{ backgroundColor: area.color, opacity: unassigned ? 0.45 : 1 }}
+        />
+        <span className="min-w-0 flex-1 truncate text-small font-medium">{area.name}</span>
+        {selected && <Badge tone="nominal">drawing here</Badge>}
+        {unassigned && <Badge tone="caution">no order</Badge>}
+        <span className="tnum shrink-0 text-micro text-ink-faint">{integer(area.members.length)}</span>
+      </button>
+
+      {selected && (
+        <Field label="Area name">
+          <input
+            className="input mt-2"
+            value={area.name}
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        </Field>
+      )}
+
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <Field label="Wave">
+          <select
+            className="input"
+            value={area.wave ?? (unassigned ? '' : 'custom')}
+            onChange={(event) => {
+              const value = event.target.value
+              if (value === '') {
+                onChange({ wave: null, issueTimeS: null })
+                return
+              }
+              if (value === 'custom') {
+                onChange({ wave: null, issueTimeS: area.issueTimeS ?? 6300 })
+                return
+              }
+              const next = RECORD_WAVES.find((w) => w.id === value)
+              if (next) onChange({ wave: next.id, issueTimeS: next.issueTimeS, color: next.color })
+            }}
+          >
+            <option value="">no order</option>
+            {RECORD_WAVES.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.id} &middot; {w.wallClock}
+              </option>
+            ))}
+            <option value="custom">custom time</option>
+          </select>
+        </Field>
+        <Field label="Issued at (s)" hint={unassigned ? 'no order' : simClock(area.issueTimeS as number)}>
+          <input
+            className="input tnum"
+            type="number"
+            value={area.issueTimeS ?? ''}
+            placeholder="none"
+            onChange={(event) =>
+              onChange({
+                issueTimeS: event.target.value === '' ? null : Number(event.target.value) || 0,
+              })
+            }
+          />
+        </Field>
+      </div>
+
+      {unassigned && (
+        <p className="mt-1 text-micro text-ink-faint">
+          No broadcast on 28 May named this area. Its {integer(area.members.length)} households run
+          with no order until a wave is chosen.
+        </p>
+      )}
+
+      {offRecord && (
+        <p className="mt-1 text-micro text-status-caution">
+          {area.wave} went out at {simClock(wave.issueTimeS)} in the record. This area is set to{' '}
+          {simClock(area.issueTimeS as number)}.
+        </p>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-1">
+        {AREA_PALETTE.map((color) => (
+          <button
+            key={color}
+            type="button"
+            aria-label={`colour ${color}`}
+            className={`h-4 w-4 rounded-sm border ${
+              area.color === color ? 'border-ink-text' : 'border-ink-line'
+            }`}
+            style={{ backgroundColor: color }}
+            onClick={() => onChange({ color })}
+          />
+        ))}
+      </div>
+
+      {selected && (
+        <>
+          <Field label="Message">
+            <textarea
+              className="input mt-2 h-16 resize-none"
+              value={area.hazardText}
+              onChange={(event) => onChange({ hazardText: event.target.value })}
+            />
+          </Field>
+          <Field label="Comfort centre" hint="Named in the order, left empty when none was.">
+            <input
+              className="input"
+              value={area.comfortCentre ?? ''}
+              placeholder="none"
+              onChange={(event) => onChange({ comfortCentre: event.target.value || null })}
+            />
+          </Field>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={onOrderAll} disabled={households === 0}>
+              Order every unassigned household
+            </Button>
+            {area.members.length > 0 && (
+              <Button variant="ghost" onClick={onClearMembers}>
+                Empty
+              </Button>
+            )}
+            <Button variant="ghost" onClick={onRemove}>
+              Remove
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
  * Authoring a scenario package by drawing on the map.
  *
- * Three tools over one map. Households are the buildings that evacuate, the alert area is
- * the buildings an order covers, and fire origins are placed by click. The package is
- * validated on the backend as the draft changes, so the operator sees a named problem
- * while there is still something to change, and creating it never writes over anything.
+ * Four tools over one map. Households are the buildings that evacuate, alert areas are the
+ * groups of households an order covers, each with its own issue time and colour, and fire
+ * origins are placed by click. The package is validated on the backend as the draft
+ * changes, so the operator sees a named problem while there is still something to change,
+ * and creating it never writes over anything.
  */
 export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) {
   const pushToast = useConsole((s) => s.pushToast)
@@ -211,7 +397,10 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
   const [tool, setTool] = useState<AuthorTool>('households')
   const [subtractive, setSubtractive] = useState(false)
   const [households, setHouseholds] = useState<Household[]>([])
-  const [areaMembers, setAreaMembers] = useState<string[]>([])
+  const [areas, setAreas] = useState<DraftAlertArea[]>([])
+  const [selectedArea, setSelectedArea] = useState<string | null>(null)
+  const [recordAreas, setRecordAreas] = useState<RecordAreasPayload | null>(null)
+  const [stored, setStored] = useState<StoredPackage | null>(null)
   const [fires, setFires] = useState<DraftFire[]>([])
   const [selectedFire, setSelectedFire] = useState<string | null>(null)
   const [anchorId, setAnchorId] = useState<string | null>(null)
@@ -222,9 +411,6 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
   const [packageId, setPackageId] = useState('')
   const [idTouched, setIdTouched] = useState(false)
   const [description, setDescription] = useState('')
-  const [areaName, setAreaName] = useState('ordered_area')
-  const [areaOrderTimeS, setAreaOrderTimeS] = useState(1800)
-  const [areaHazardText, setAreaHazardText] = useState('Evacuate immediately.')
 
   const [staleBundle, setStaleBundle] = useState(false)
   const [validation, setValidation] = useState<DraftValidation | null>(null)
@@ -232,21 +418,45 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
 
   const index = useMemo(() => new Map(buildings.map((b) => [b.id, b])), [buildings])
   const householdIds = useMemo(() => new Set(households.map((h) => h.building_id)), [households])
-  const areaIds = useMemo(() => new Set(areaMembers), [areaMembers])
+  const areaColors = useMemo(() => areaColorByBuilding(areas), [areas])
   const counts = useMemo(
     () => new Map(households.map((h) => [h.building_id, h.count])),
     [households],
   )
   const raised = useMemo(() => households.filter((h) => h.count > 1).length, [households])
+  const storedAgents = useMemo(
+    () => (stored ? stored.households.reduce((sum, h) => sum + h.count, 0) : 0),
+    [stored],
+  )
+  const ordered = useMemo(
+    () => orderedAreas(areas).reduce((sum, a) => sum + a.members.length, 0),
+    [areas],
+  )
+  // Every household an order does not reach, whether it sits in an area carrying no time
+  // or in no area at all. Counting only the first would let a household dragged out of
+  // every area vanish from both tallies while still running unordered.
+  const unassignedCount = Math.max(0, households.length - ordered)
+  const looseCount = useMemo(
+    () =>
+      unassignedCount - unassignedAreas(areas).reduce((sum, a) => sum + a.members.length, 0),
+    [unassignedCount, areas],
+  )
 
-  // The area is a subset of the households by construction, so removing a household
-  // removes it from the area in the same breath.
+  // Every area is a subset of the households by construction, so removing a household
+  // removes it from its area in the same breath.
   useEffect(() => {
-    setAreaMembers((current) => {
-      const pruned = pruneAreaMembers(current, householdIds)
-      return pruned.length === current.length ? current : pruned
-    })
+    setAreas((current) => pruneAreas(current, householdIds))
   }, [householdIds])
+
+  // Keep a selection pointing at an area that still exists, so the area tool always has
+  // somewhere to draw into.
+  useEffect(() => {
+    if (areas.length === 0) {
+      if (selectedArea !== null) setSelectedArea(null)
+      return
+    }
+    if (!areas.some((a) => a.key === selectedArea)) setSelectedArea(areas[0].key)
+  }, [areas, selectedArea])
   const counted = useMemo(() => totals(households, index), [households, index])
 
   // Holding shift turns a drag into a removal, which is the fastest way to trim a
@@ -289,7 +499,7 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
         // and a fire cannot be placed without them.
         setStaleBundle(layer.buildings.length > 0 && layer.buildings[0].x == null)
         setHouseholds([])
-        setAreaMembers([])
+        setAreas([])
         setFires([])
       })
       .catch((error: unknown) => {
@@ -319,16 +529,12 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
         description,
         sourcePackage,
         households,
-        areaName,
-        areaMembers,
-        areaOrderTimeS,
+        areas,
         areaChannel: 'broadcast',
         areaInstruction: 'evacuate_now',
-        areaHazardText,
         fires,
       }),
-    [effectiveId, label, description, sourcePackage, households, areaName, areaMembers,
-     areaOrderTimeS, areaHazardText, fires],
+    [effectiveId, label, description, sourcePackage, households, areas, fires],
   )
 
   // Validation is asked for as the draft settles, so a problem shows up while the
@@ -364,10 +570,14 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
           pushToast(`${dropped} buildings in that box sit too far from a road to spawn`, 'warn')
         }
       } else if (tool === 'area') {
-        setAreaMembers((current) =>
+        if (!selectedArea) {
+          pushToast('Add an alert area first, then draw the households it covers.', 'warn')
+          return
+        }
+        setAreas((current) =>
           subtract
-            ? removeAreaMembers(current, picked)
-            : addAreaMembers(current, picked, householdIds),
+            ? clearAreaMembers(current, selectedArea, picked)
+            : assignAreaMembers(current, selectedArea, picked, householdIds),
         )
         const skipped = picked.filter((b) => !householdIds.has(b.id)).length
         if (!subtract && skipped > 0) {
@@ -378,7 +588,7 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
         }
       }
     },
-    [buildings, tool, householdIds, pushToast],
+    [buildings, tool, householdIds, selectedArea, pushToast],
   )
 
   const onBuildingClick = useCallback(
@@ -387,11 +597,15 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
       if (!building) return
       if (tool === 'households') setHouseholds((current) => toggleBuilding(current, building))
       else if (tool === 'area') {
+        if (!selectedArea) {
+          pushToast('Add an alert area first, then click the households it covers.', 'warn')
+          return
+        }
         if (!householdIds.has(buildingId)) {
           pushToast('Only a household can be ordered. Select it under Households first.', 'warn')
           return
         }
-        setAreaMembers((current) => toggleAreaMember(current, buildingId, householdIds))
+        setAreas((current) => toggleAreaMember(current, selectedArea, buildingId, householdIds))
       }
       else if (tool === 'count') {
         // Only a household holds agents, so clicking anything else says so instead of
@@ -425,6 +639,99 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
     [buildings, pushToast, sourcePackage],
   )
 
+  // Whether this source package has had its households placed against the alert record.
+  useEffect(() => {
+    if (!sourcePackage) {
+      setRecordAreas(null)
+      return
+    }
+    let cancelled = false
+    api
+      .packageRecordAreas(sourcePackage)
+      .then((payload) => !cancelled && setRecordAreas(payload))
+      .catch(() => !cancelled && setRecordAreas(null))
+    return () => {
+      cancelled = true
+    }
+  }, [sourcePackage])
+
+  const loadRecordAreas = useCallback(() => {
+    if (!recordAreas) return
+    const seeded = areasFromRecord(recordAreas, buildings)
+    setHouseholds(seeded.households)
+    setAreas(seeded.areas)
+    setSelectedArea(seeded.areas[0]?.key ?? null)
+    const unordered = seeded.households.length - seeded.areas.reduce((n, a) => n + a.members.length, 0)
+    pushToast(
+      `${integer(seeded.households.length)} households in ${seeded.areas.length} ordered areas` +
+        (unordered > 0 ? `, ${integer(unordered)} left unordered by the record` : ''),
+      'good',
+    )
+    if (seeded.skipped > 0) {
+      pushToast(`${integer(seeded.skipped)} record households are not in this map bundle`, 'warn')
+    }
+  }, [recordAreas, buildings, pushToast])
+
+  // What the source package already holds, so it can be reopened instead of redrawn.
+  useEffect(() => {
+    if (!sourcePackage) {
+      setStored(null)
+      return
+    }
+    let cancelled = false
+    api
+      .packageAuthoring(sourcePackage)
+      .then((payload) => {
+        if (cancelled) return
+        // A package with no buildings to redraw has nothing to reopen, even though its
+        // fires are still readable through the fire panel.
+        setStored(payload.households.length > 0 ? payload : null)
+      })
+      .catch(() => !cancelled && setStored(null))
+    return () => {
+      cancelled = true
+    }
+  }, [sourcePackage])
+
+  const loadStored = useCallback(() => {
+    if (!stored) return
+    const opened = areasFromPackage(stored, buildings)
+    setHouseholds(opened.households)
+    setAreas(opened.areas)
+    setSelectedArea(opened.areas[0]?.key ?? null)
+    if (stored.fires.length > 0) {
+      setFires(stored.fires)
+      setSelectedFire(stored.fires[0]?.id ?? null)
+    }
+    pushToast(
+      `Loaded ${integer(opened.households.length)} households, ${opened.areas.length} areas ` +
+        `and ${stored.fires.length} fire origins from ${sourcePackage}`,
+      'good',
+    )
+    if (opened.skipped > 0) {
+      pushToast(`${integer(opened.skipped)} of its households are not in this map bundle`, 'warn')
+    }
+  }, [stored, buildings, sourcePackage, pushToast])
+
+  const importFires = useCallback(
+    async (packageId: string) => {
+      if (!packageId) return
+      try {
+        const payload = await api.packageFires(packageId)
+        if (payload.fires.length === 0) {
+          pushToast(`${packageId} has no fire origin to take`, 'warn')
+          return
+        }
+        setFires(payload.fires)
+        setSelectedFire(payload.fires[0]?.id ?? null)
+        pushToast(`Took ${integer(payload.fires.length)} fire origins from ${packageId}`, 'good')
+      } catch {
+        pushToast(`${packageId} has no fires.json to read`, 'bad')
+      }
+    },
+    [pushToast],
+  )
+
   const create = async () => {
     setCreating(true)
     try {
@@ -454,7 +761,10 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
       <div className="flex min-h-0 flex-col gap-3 overflow-auto">
         <Panel title="Package" bodyClassName="p-0">
           <div className="space-y-3 p-3">
-            <Field label="Source package" hint="Its road network, shelters, and routes are inherited.">
+            <Field
+              label="Source package"
+              hint="Its road network, shelters, and routes are inherited. Choosing one gives you its map and an empty canvas."
+            >
               <select
                 className="input"
                 value={sourcePackage}
@@ -468,6 +778,29 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
                 ))}
               </select>
             </Field>
+
+            {stored && (
+              <div className="rounded border border-ink-line p-2">
+                <p className="text-micro text-ink-faint">
+                  {sourcePackage} already holds {integer(storedAgents)} agents in{' '}
+                  {integer(stored.households.length)} households, {stored.areas.length}{' '}
+                  {stored.areas.length === 1 ? 'alert area' : 'alert areas'}, and{' '}
+                  {stored.fires.length} fire origins. Load them to revise the package and save
+                  the result under a new name.
+                </p>
+                <Button variant="ghost" onClick={loadStored}>
+                  Load its households, areas and fires
+                </Button>
+                {stored.areas_without_buildings.length > 0 && (
+                  <p className="mt-1 text-micro text-status-caution">
+                    {stored.areas_without_buildings.join(', ')}{' '}
+                    {stored.areas_without_buildings.length === 1 ? 'is an edge list' : 'are edge lists'}{' '}
+                    with no buildings, so {stored.areas_without_buildings.length === 1 ? 'it' : 'they'}{' '}
+                    cannot be redrawn here.
+                  </p>
+                )}
+              </div>
+            )}
             <Field label="Name shown in Setup">
               <input
                 className="input"
@@ -567,49 +900,93 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
         </Panel>
 
         {tool === 'area' && (
-          <Panel title="Alert area" bodyClassName="p-0">
+          <Panel
+            title="Alert areas"
+            bodyClassName="p-0"
+            action={
+              <Button variant="ghost" onClick={() => {
+                const area = newArea(areas)
+                setAreas((current) => [...current, area])
+                setSelectedArea(area.key)
+              }}>
+                Add area
+              </Button>
+            }
+          >
             <div className="space-y-3 p-3">
+              <div className="grid grid-cols-3 gap-2">
+                <StatTile label="Ordered" value={integer(ordered)} />
+                <StatTile label="No order" value={integer(unassignedCount)} />
+                <StatTile label="Areas" value={integer(areas.length)} />
+              </div>
               <p className="text-micro text-ink-faint">
-                {integer(areaMembers.length)} of {integer(households.length)} households ordered,
-                shown orange. Blue households are selected but not ordered. The order is scoped to
-                the roads those households sit on.
+                Each area draws in its own colour, and an order is scoped to the roads its
+                households sit on. Areas sharing an issue time go out as one broadcast. An area
+                marked no order holds its households and writes nothing, so give it a wave to
+                bring it into the schedule, or drag its households into another area.
               </p>
+              {looseCount > 0 && (
+                <p className="text-micro text-status-caution">
+                  {integer(looseCount)} households belong to no area at all, shown blue. Draw them
+                  into an area, or leave them to run with no order.
+                </p>
+              )}
+
               {households.length === 0 && (
                 <p className="text-micro text-status-caution">
                   Select households first. An order only reaches buildings that hold agents.
                 </p>
               )}
-              <Field label="Area name">
-                <input className="input" value={areaName} onChange={(e) => setAreaName(e.target.value)} />
-              </Field>
-              <Field label="Order issued at (s)" hint={simClock(areaOrderTimeS)}>
-                <input
-                  className="input tnum"
-                  type="number"
-                  value={areaOrderTimeS}
-                  onChange={(e) => setAreaOrderTimeS(Number(e.target.value) || 0)}
-                />
-              </Field>
-              <Field label="Message">
-                <textarea
-                  className="input h-16 resize-none"
-                  value={areaHazardText}
-                  onChange={(e) => setAreaHazardText(e.target.value)}
-                />
-              </Field>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  disabled={households.length === 0 || areaMembers.length === households.length}
-                  onClick={() => setAreaMembers(households.map((h) => h.building_id))}
-                >
-                  Order all households
-                </Button>
-                {areaMembers.length > 0 && (
-                  <Button variant="ghost" onClick={() => setAreaMembers([])}>
-                    Clear area
+
+              {recordAreas && (
+                <div className="rounded border border-ink-line p-2">
+                  <p className="text-micro text-ink-faint">
+                    This map has {recordAreas.areas.length} communities placed against the 2023
+                    alert record, covering {integer(recordAreas.households)} households.
+                  </p>
+                  <Button variant="ghost" onClick={loadRecordAreas}>
+                    Load record areas
                   </Button>
-                )}
+                  <p className="mt-1 text-micro text-ink-faint">
+                    Replaces the current households and areas with the record placement.
+                  </p>
+                </div>
+              )}
+
+              {areas.length === 0 && (
+                <p className="text-micro text-ink-faint">
+                  No area yet. Add one, then drag a box over the households its order covers.
+                </p>
+              )}
+
+              <div className="space-y-2">
+                {areas.map((area) => (
+                  <AreaEditor
+                    key={area.key}
+                    area={area}
+                    selected={area.key === selectedArea}
+                    households={households.length}
+                    onSelect={() => setSelectedArea(area.key)}
+                    onChange={(patch) => setAreas((current) => updateArea(current, area.key, patch))}
+                    onRemove={() => setAreas((current) => removeArea(current, area.key))}
+                    onOrderAll={() =>
+                      setAreas((current) =>
+                        assignAreaMembers(
+                          current,
+                          area.key,
+                          households
+                            .filter((h) => !areaColors.has(h.building_id))
+                            .map((h) => index.get(h.building_id))
+                            .filter((b): b is NonNullable<typeof b> => Boolean(b)),
+                          householdIds,
+                        ),
+                      )
+                    }
+                    onClearMembers={() =>
+                      setAreas((current) => updateArea(current, area.key, { members: [] }))
+                    }
+                  />
+                ))}
               </div>
             </div>
           </Panel>
@@ -621,6 +998,27 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
               {fires.length === 0 && (
                 <p className="text-micro text-ink-faint">Click the map to place the first origin.</p>
               )}
+
+              <div className="rounded border border-ink-line p-2">
+                <Field
+                  label="Take the fires from another package"
+                  hint="Replaces what is placed. Use it for a record-exact fire, whose coordinates cannot be clicked."
+                >
+                  <select
+                    className="input"
+                    value=""
+                    onChange={(event) => importFires(event.target.value)}
+                  >
+                    <option value="">choose a package</option>
+                    {sources.map((id) => (
+                      <option key={id} value={id}>
+                        {id}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
               <Field label={`Front shown at ${simClock(previewTimeS)}`}>
                 <input
                   type="range"
@@ -659,7 +1057,7 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
                 <IssueList issues={validation.problems} tone="bad" />
                 <IssueList issues={validation.warnings} tone="warn" />
                 {validation.ok && validation.problems.length === 0 && (
-                  <p className="text-micro text-status-good">Ready to create.</p>
+                  <p className="text-micro text-status-nominal">Ready to create.</p>
                 )}
               </>
             )}
@@ -703,7 +1101,7 @@ export function AuthorView({ onDone }: { onDone: (packageId: string) => void }) 
               buildings={buildings}
               roads={roads}
               householdIds={householdIds}
-              areaIds={areaIds}
+              areaColors={areaColors}
               counts={counts}
               anchorId={tool === 'count' ? anchorId : null}
               onAnchorMove={setAnchorPos}

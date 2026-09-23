@@ -271,6 +271,10 @@ def compose_alerts(
             "building_ids": members,
             "edges": edges,
         }
+        # The colour the operator gave the area, carried so a written package draws the
+        # same way it was authored. The resolver never reads it.
+        if area.get("color"):
+            composed_areas[name]["color"] = str(area["color"])
 
     schedule = []
     for event in events:
@@ -314,6 +318,7 @@ def compose_alerts(
             "channel": channel,
             "hazard_text": str(event.get("hazard_text", "") or ""),
             "routing_text": event.get("routing_text") or None,
+            "comfort_centre": event.get("comfort_centre") or None,
         })
     schedule.sort(key=lambda row: row["issue_time_s"])
 
@@ -364,6 +369,90 @@ def compose_fires(
         sources.append(source)
     sources.sort(key=lambda row: row["t0"])
     return {"sources": sources}
+
+
+#: Colours an area falls back to when the package predates colour being recorded.
+_FALLBACK_AREA_COLORS = ("#E69F00", "#F0E442", "#CC79A7", "#8E5FA8",
+                         "#56B4E9", "#009E73", "#C2255C", "#B26A00")
+
+
+def read_package(package_id: str) -> Optional[Dict[str, Any]]:
+    """Read an existing package back into the shape the authoring view draws.
+
+    Choosing a source package supplies the map and clears the canvas, which is right when
+    the point is to draw something new on a network. It is wrong when the point is to open
+    a package, adjust it, and save the result under a new name. This reads the second case
+    back, so a package can be revised without redrawing it.
+
+    Households come from ``spawns.json``, where ``building_id`` repeats once per agent, so
+    counting occurrences recovers the per-building count the view holds. Areas come from
+    ``alerts.json``, matched to the schedule for their issue time and wording. Returns
+    ``None`` when the package has no spawn selection to read.
+    """
+    directory = CONFIGS_DIR / package_id
+    spawns_path = directory / "spawns.json"
+    if not spawns_path.is_file():
+        return None
+
+    def _load(name: str) -> Any:
+        path = directory / name
+        if not path.is_file():
+            return None
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+    spawns = _load("spawns.json")
+    if not isinstance(spawns, dict) or "groups" not in spawns:
+        # The detailed spawn format carries no building ids, so there is nothing the
+        # building-based view can reopen.
+        return None
+
+    counts: Dict[str, int] = {}
+    order: List[str] = []
+    for group in spawns.get("groups") or []:
+        for raw in group.get("building_id") or []:
+            building_id = str(raw)
+            if building_id not in counts:
+                counts[building_id] = 0
+                order.append(building_id)
+            counts[building_id] += 1
+    households = [{"building_id": b, "count": counts[b]} for b in order]
+
+    areas: List[Dict[str, Any]] = []
+    alerts = _load("alerts.json")
+    if isinstance(alerts, dict):
+        event_of: Dict[str, Dict[str, Any]] = {}
+        for event in alerts.get("schedule") or []:
+            for name in event.get("areas") or []:
+                event_of.setdefault(str(name), event)
+        for i, (name, spec) in enumerate((alerts.get("areas") or {}).items()):
+            event = event_of.get(str(name))
+            areas.append({
+                "name": str(name),
+                "label": str(spec.get("label") or name),
+                "color": str(spec.get("color") or _FALLBACK_AREA_COLORS[i % len(_FALLBACK_AREA_COLORS)]),
+                "building_ids": [str(b) for b in (spec.get("building_ids") or [])],
+                "wave": str(event.get("id")) if event and event.get("id") else None,
+                "issue_time_s": float(event["issue_time_s"]) if event and event.get("issue_time_s") is not None else None,
+                "hazard_text": str((event or {}).get("hazard_text") or ""),
+                "comfort_centre": (event or {}).get("comfort_centre") or None,
+            })
+
+    fires_cfg = _load("fires.json") or {}
+    fires = list(fires_cfg.get("sources") or []) + list(fires_cfg.get("events") or [])
+
+    return {
+        "package": package_id,
+        "households": households,
+        "areas": areas,
+        "fires": fires,
+        # An area authored before building ids were recorded has an edge list and no
+        # buildings, so the view cannot redraw it and says so rather than losing it.
+        "areas_without_buildings": [a["name"] for a in areas if not a["building_ids"]],
+    }
 
 
 def validate_draft(

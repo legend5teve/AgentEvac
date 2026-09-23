@@ -18,8 +18,8 @@ export interface AuthorMapProps {
   roads: GeoJSON.FeatureCollection | null
   /** Buildings selected as households, so the map can fill them. */
   householdIds: Set<string>
-  /** Buildings inside the alert area. */
-  areaIds: Set<string>
+  /** Colour each ordered building draws in, keyed by building id. Absent means unordered. */
+  areaColors: Map<string, string>
   /** Agents per building, for the ones holding more than one. */
   counts: Map<string, number>
   /** Building whose count stepper is open, if any. */
@@ -49,7 +49,7 @@ export interface AuthorMapProps {
  */
 export function AuthorMap(props: AuthorMapProps) {
   const {
-    buildings, roads, householdIds, areaIds, counts, anchorId, onAnchorMove,
+    buildings, roads, householdIds, areaColors, counts, anchorId, onAnchorMove,
     fires, selectedFire, previewTimeS, tool, subtractive,
     onBox, onBuildingClick, onPlaceFire, onSelectFire,
   } = props
@@ -227,7 +227,8 @@ export function AuthorMap(props: AuthorMapProps) {
     const features = buildings.map((building) =>
       buildingFeature(building, {
         household: householdIds.has(building.id),
-        area: areaIds.has(building.id),
+        area: areaColors.has(building.id),
+        areaColor: areaColors.get(building.id) ?? null,
         count: counts.get(building.id) ?? 0,
       }),
     )
@@ -235,7 +236,7 @@ export function AuthorMap(props: AuthorMapProps) {
       type: 'FeatureCollection',
       features,
     })
-  }, [ready, buildings, householdIds, areaIds, counts])
+  }, [ready, buildings, householdIds, areaColors, counts])
 
   // ------------------------------------------------------------------- fires
   useEffect(() => {

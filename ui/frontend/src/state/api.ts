@@ -1,17 +1,20 @@
 import type {
   BuildingsPayload,
+  DraftFire,
   DraftValidation,
   HealthPayload,
   MetricsPayload,
   PackagesPayload,
   PackageDraft,
   Preview,
+  RecordAreasPayload,
   Recording,
   RunConfig,
   RunRecord,
   ScheduleRow,
   ScenarioPackage,
   SessionState,
+  StoredPackage,
   ValidationResult,
 } from './types'
 
@@ -64,6 +67,14 @@ export const api = {
   packagePreview: (id: string) => request<Preview>(`/api/packages/${encodeURIComponent(id)}/preview`),
   packageBuildings: (id: string) =>
     request<BuildingsPayload>(`/api/packages/${encodeURIComponent(id)}/buildings`),
+  packageRecordAreas: (id: string) =>
+    request<RecordAreasPayload>(`/api/packages/${encodeURIComponent(id)}/record-areas`),
+  packageFires: (id: string) =>
+    request<{ package: string; count: number; fires: DraftFire[] }>(
+      `/api/packages/${encodeURIComponent(id)}/fires`,
+    ),
+  packageAuthoring: (id: string) =>
+    request<StoredPackage>(`/api/packages/${encodeURIComponent(id)}/authoring`),
   validatePackage: (draft: PackageDraft) =>
     request<DraftValidation>('/api/packages/validate', {
       method: 'POST',
