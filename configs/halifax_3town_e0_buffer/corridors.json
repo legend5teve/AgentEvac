@@ -1,0 +1,43 @@
+{
+  "_meta": {
+    "description": "Corridor edge sets for the Part J egress-flow split. Each corridor is a screenline, a small cut of edges that traffic moving that way has to cross. compute_corridor_flow counts the distinct evacuating agents seen on each set and reports their ids, so a run can be cross-tabulated by spawn area.",
+    "derivation": "Measured from the recorded edge traces of the E0 baseline run outputs/E0/e0_msgoff/llm_seed47, not authored by hand. For every candidate edge the share of agents per chosen destination was computed, and the screenlines are the near-universal, direction-exclusive cuts nearest each origin. Coverage figures below are from that run, 182 households.",
+    "naming": "sumo/halifax.net.xml carries no street names, so corridors are named by function and not by road. The westbound cut is the Hwy 103 analogue that docs/build_plan/06_experiments_and_validation.md names as 697504315#1, confirmed here against observed traffic. That file's second guess 70756039#1 carried 2 of 182 agents and is not a screenline.",
+    "notes": {
+      "westwood_exit": "Westwood Hills outbound, 331 to 545 m out. 60 of 60 in E0.",
+      "highland_park_exit": "Highland Park outbound, 352 to 450 m out. 60 of 60.",
+      "outer_extension_exit": "Wave-3 extension outbound, 1.1 to 1.2 km out. 62 of 62.",
+      "egress_west_hwy103": "Westbound toward St Margarets Bay and the Black Point comfort centre, 2.1 to 3.4 km southwest of Westwood. 72 of 72 Black Point agents, no others. The NS-103 analogue.",
+      "egress_east_arterial": "Eastbound toward Bedford and the Canada Games Centre, 6.7 to 7.3 km east of Westwood. 108 of 110 Canada Games agents, no Black Point agents. The three communities feed it from different points and converge only here, so no nearer eastbound cut exists.",
+      "beaver_bank_approach": "Approach to the Beaver Bank Kinsac comfort centre, the NS-101 proxy named in the design. Nobody chose that shelter in E0, so it reads zero there and exists so a run that does use it is measurable."
+    },
+    "e0_baseline": "In E0 seed 47 all 60 Westwood households chose Black Point, so the westbound share for that community is 60 of 60 and the eastbound share is zero. The municipal plan asks roughly half of Westwood to leave east by Winslow Drive, so that zero is the quantity E2 moves if the guidance has any effect."
+  },
+  "westwood_exit": [
+    "-70646910",
+    "-70646963",
+    "-70761643"
+  ],
+  "highland_park_exit": [
+    "-70946822#0",
+    "70946890"
+  ],
+  "outer_extension_exit": [
+    "-71315563#1",
+    "-71315563#0"
+  ],
+  "egress_west_hwy103": [
+    "697504315#1",
+    "697504321#0",
+    "697504321#1"
+  ],
+  "egress_east_arterial": [
+    "-1198145848#7",
+    "-1198145848#5",
+    "-1198145848#3",
+    "-1198145848#0"
+  ],
+  "beaver_bank_approach": [
+    "1247430237#0"
+  ]
+}

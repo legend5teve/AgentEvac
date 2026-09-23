@@ -1,0 +1,233 @@
+{
+  "_meta": {
+    "description": "E2 routing counterfactual. Identical to configs/halifax_3town_e0/ in network, spawns, fires, destinations, routes and alert timing. The only delta is routing_text, populated on every event, which makes route guidance visible to the ordered households. See configs/halifax_3town_e0_routing/README.md for provenance per area and the known limits.",
+    "clock": {
+      "anchor": "ignition (ALARM 1, deck and woods on fire at Juneberry Lane, 15:28 on 28 May 2023)",
+      "sim_t0_equals": "15:28:00 ADT",
+      "note": "Matches fire source Juneberry_Lane t0=0 in configs/halifax_3town/fires.json. All *_time_s values are seconds after ignition.",
+      "e911_call_at_s": -75,
+      "required_sim_end_time_s": 15180,
+      "recommended_sim_end_time_s": 28800
+    },
+    "arm": "E2 content arm (historical schedule plus route guidance). routing_text is populated on every event, so the resolver reports routing_visible and the per-agent regime becomes advice_guided. Run with SCENARIO_TONE=neutral so the added guidance is not confounded with directive exhortation. The 2023 broadcasts carried no route guidance, so this arm is a forward-looking practice question and not a reconstruction of what was said.",
+    "semantics": {
+      "areas_are_cumulative": true,
+      "note": "Once an order is issued for an area it stays in effect for the rest of the run. Each event lists only the NEWLY ordered areas. The resolver should treat an area as ordered from its first covering event onward.",
+      "membership_test": "An agent belongs to an area if its spawn edge is in that area's 'edges' list. Edge lists are the active 3-town spawn edges per community."
+    },
+    "caveats": [
+      "Fire-spread compression: the model fire sources finish igniting at ~5800 s (97 min) whereas the real evacuation orders extended to 253 min (19:41). Wave-3 (15180 s) fires when the model fire is already near maximal extent. State as a limitation or re-time the fire layer.",
+      "Area abstraction: the model's three communities are mapped to the three real alert waves. Real wave 3 covered five subdivisions (Haliburton Hills, Glen Arbour, Pockwock, White Hills, Lucasville); the model represents it as the english_corner cluster. Confirm community centroids against the net geometry.",
+      "Verbatim wording: hazard_text values are near-verbatim paraphrases from the HRFE/HRM reports. Replace with the NAAD/Alert Ready archive text if recovered.",
+      "Comfort-centre naming: Wave 1 named Black Point in the order. Per the E2 plan this moves destination naming into E0 and makes the E2 delta route-guidance only.",
+      "Destination control mode: CONTROL_MODE is 'destination', so route guidance can only act through which comfort centre an agent picks. Naming an egress corridor steers the destination by construction, and the E2 versus E0 delta should be read as the effect of official guidance on destination choice and the resulting exposure, not as road-level route compliance.",
+      "Districts are not named. The plan assigns districts 407-01, 407-03 and 407-05 to Westwood Blvd and 407-02, 407-04 and 407-06 to Winslow Dr, and their boundaries exist only as a map image in the report appendix. The binding here is by egress road, which is the rule the districts encode, so the split is reproduced without claiming to reproduce the district boundaries themselves.",
+      "The binding is map-confirmed, not derived. scripts/derive_westwood_districts.py recomputes it from the network as a cross-check and currently disagrees on 3 of 16 edges, all on Wyndham Drive and 14 households, where a shortest path out favours Westwood Boulevard by 83 m while the district map places them in 407-04 on the Winslow Drive side. The map wins, since a shortest path is a proxy for the district rule and not the rule itself. Run the script to see the current disagreement."
+    ],
+    "sources": {
+      "alert_times": "HRFE Post Incident Analysis (240806rci01), Event Timeline, physical PDF pp.14-16; cross-checked against HRM After Action Report (231017rci05), timeline table, physical PDF p.10",
+      "door_to_door": "HRM After Action Report (231017rci05), physical PDF p.10 ('15:42 RCMP began door-to-door evacuation of residents downwind in the path of fire')"
+    },
+    "routing_provenance": {
+      "westwood_hills": "DOCUMENTED AND FULLY MAP-CONFIRMED. HRM 231017rci05 Westwood Hills Evacuation Plan appendix. Every one of the 16 sampled household edges was placed against the appendix evacuation-district map. 407-03 holds Westwood Boulevard and Tattingstone Court and evacuates down Westwood Blvd. 407-04 holds Wyndham Drive and Windbreak Run, and Hemlock Drive straddles 407-04 and 407-06, all evacuating via Winslow Drive. No sampled edge is unplaced.",
+      "highland_park": "INFERRED. No route guidance for this community exists in any source.",
+      "outer_extension": "INFERRED. No route guidance for these communities exists in any source.",
+      "_note": "The asymmetry is a property of the record. HRM holds an operational evacuation plan for Westwood Hills alone, with six evacuation districts, muster points and turn directions. For the other Hammonds Plains Road communities the Community Wildfire Protection Plan appendix recommends that a community evacuation plan with evacuation routes be put in place and specifies none, and the report's own recommendations ask HRM to revisit the evacuation-route process and publish routes. The plan names two westerly pre-determined centres for the Westwood Boulevard side and two easterly for the Winslow Drive side, so each branch carries its own comfort_centre, resolved to the two that were actually opened on 28 May."
+    }
+  },
+  "areas": {
+    "westwood_hills": {
+      "label": "Westwood Hills subdivision (Upper Tantallon / Upper Hammonds Plains)",
+      "model_community": "upper_tantallon",
+      "agents": 60,
+      "edges": [
+        "-70646910",
+        "-70646940",
+        "-70646943",
+        "-70646958",
+        "-70646959#0",
+        "-70646959#1",
+        "-70760263#0",
+        "-70760263#1",
+        "-70760263#2",
+        "70646940",
+        "70646958",
+        "70646959#0",
+        "70646959#1",
+        "70647058#0",
+        "70760263#1",
+        "70760263#2"
+      ]
+    },
+    "highland_park": {
+      "label": "Yankeetown / Highland Park subdivision (Hammonds Plains)",
+      "model_community": "highland_park",
+      "agents": 60,
+      "edges": [
+        "-70946822#2",
+        "-70946834",
+        "-70946837",
+        "-70946839",
+        "-70946840#1",
+        "70946822#1",
+        "70946822#2",
+        "70946834",
+        "70946837",
+        "70946840#0",
+        "70946840#1"
+      ]
+    },
+    "outer_extension": {
+      "label": "Wave-3 extension proxy (real: Haliburton Hills, Glen Arbour, Pockwock Rd, White Hills, Lucasville Rd to Sackville Dr)",
+      "model_community": "english_corner",
+      "agents": 62,
+      "edges": [
+        "-71321910#0",
+        "-71321910#1",
+        "-71321913#2",
+        "-71322228",
+        "-71322252#0",
+        "-71322252#1",
+        "-71322252#2",
+        "-71322258",
+        "-71322546#0",
+        "71321900#0",
+        "71321900#1",
+        "71321910#0",
+        "71321910#1",
+        "71321913#2",
+        "71322228",
+        "71322252#1",
+        "71322258",
+        "71322579"
+      ]
+    }
+  },
+  "schedule": [
+    {
+      "id": "EA-1",
+      "issue_time_s": 6300,
+      "wall_clock": "17:13",
+      "areas": [
+        "westwood_hills"
+      ],
+      "instruction": "evacuate_now",
+      "hazard_text": "Evacuation ordered for Westwood Hills subdivision due to ongoing multiple structure and forest fire. All residents in Westwood Hills ordered to evacuate.",
+      "comfort_centre": "Black Point and Area Community Centre",
+      "routing_text": "Westwood Hills has two exit roads and both meet Hammonds Plains Road within 200 metres of each other. RCMP access control points are set at Westwood Boulevard and at Winslow Drive, and all traffic inside the subdivision is outbound. Traffic leaving by Westwood Boulevard turns right at Hammonds Plains Road and continues west to the reception centre at Black Point. Traffic leaving by Winslow Drive turns left at Hammonds Plains Road and continues east to the registration centre at the Canada Games Centre. The split is to keep the two exits from concentrating on the same stretch of Hammonds Plains Road.",
+      "channel": "wireless_emergency_alert",
+      "source": "HRFE 240806rci01 p.16 (17:13:00 NSEMO Emergency Alert Issued) ROUTING: HRM 231017rci05 Westwood Hills Evacuation Plan appendix, Operations and Police sections, near-verbatim. Access control at Westwood Blvd and Winslow Dr, right turn from Westwood Blvd, left turn from Winslow Dr, stated purpose to reduce congestion on Hammonds Plains Rd. Westerly and easterly pre-determined centres resolved to the two centres actually opened on 28 May (HRM p.12). BRANCHES: each household edge bound to its egress road by scripts/derive_westwood_districts.py, a shortest path out to Hammonds Plains Road over sumo/halifax.net.xml with street names from sumo/westwood_street_names.json. Derived from the network, not authored.",
+      "routing_branches": [
+        {
+          "id": "westwood_boulevard",
+          "label": "Westwood Boulevard",
+          "households": 17,
+          "edges": [
+            "-70646910",
+            "-70646940",
+            "-70646943",
+            "-70646958",
+            "70646940",
+            "70646958"
+          ],
+          "comfort_centre": "Black Point and Area Community Centre",
+          "text": "Your household evacuates by Westwood Boulevard. RCMP access control is in place at the Westwood Boulevard intersection and all traffic inside the subdivision is outbound. Traffic leaving by Westwood Boulevard normally turns right at Hammonds Plains Road and continues west to register at the reception centre at Black Point. The subdivision is split this way so that its two exits do not concentrate on the same stretch of Hammonds Plains Road.",
+          "districts": [
+            "407-03"
+          ],
+          "source": "Map-confirmed for every sampled edge. All four Westwood Boulevard edges and both Tattingstone Court edges are in 407-03, and the plan evacuates 407-01, 407-03 and 407-05 down Westwood Blvd.",
+          "edge_districts": {
+            "-70646910": "407-03",
+            "-70646940": "407-03",
+            "-70646943": "407-03",
+            "-70646958": "407-03",
+            "70646940": "407-03",
+            "70646958": "407-03"
+          }
+        },
+        {
+          "id": "winslow_drive",
+          "label": "Winslow Drive",
+          "households": 43,
+          "edges": [
+            "-70646959#0",
+            "-70646959#1",
+            "-70760263#0",
+            "-70760263#1",
+            "-70760263#2",
+            "70646959#0",
+            "70646959#1",
+            "70647058#0",
+            "70760263#1",
+            "70760263#2"
+          ],
+          "comfort_centre": "Canada Games Centre",
+          "text": "Your household evacuates by Winslow Drive. RCMP access control is in place at the Winslow Drive intersection and all traffic inside the subdivision is outbound. Traffic leaving by Winslow Drive normally turns left at Hammonds Plains Road and continues east to register at the Canada Games Centre. The subdivision is split this way so that its two exits do not concentrate on the same stretch of Hammonds Plains Road.",
+          "districts": [
+            "407-04",
+            "407-06"
+          ],
+          "source": "Map-confirmed for every sampled edge. Wyndham Drive and Windbreak Run are in 407-04, Hemlock Drive straddles 407-04 and 407-06, and the plan evacuates 407-02, 407-04 and 407-06 via Winslow Drive, so the branch is certain throughout.",
+          "edge_districts": {
+            "-70646959#0": "407-04",
+            "-70646959#1": "407-04",
+            "-70760263#0": "407-04 or 407-06",
+            "-70760263#1": "407-04 or 407-06",
+            "-70760263#2": "407-04 or 407-06",
+            "70646959#0": "407-04",
+            "70646959#1": "407-04",
+            "70647058#0": "407-04",
+            "70760263#1": "407-04 or 407-06",
+            "70760263#2": "407-04 or 407-06"
+          }
+        }
+      ]
+    },
+    {
+      "id": "EA-2",
+      "issue_time_s": 9660,
+      "wall_clock": "18:09",
+      "areas": [
+        "highland_park"
+      ],
+      "instruction": "evacuate_now",
+      "hazard_text": "The fire has now spread, and an evacuation order is now issued for Yankeetown (Highland Park) subdivision, Hammonds Plains. The earlier order for Westwood Hills remains in effect.",
+      "comfort_centre": "Black Point and Area Community Centre",
+      "routing_text": "Leave Yankeetown and Highland Park eastbound on Hammonds Plains Road toward Bedford and register at the Canada Games Centre. Do not travel west on Hammonds Plains Road toward Upper Tantallon, which is the direction the fire is spreading from.",
+      "channel": "wireless_emergency_alert",
+      "source": "HRFE 240806rci01 p.16 (18:09:00 Update to NSEMO Emergency Alert); HRM 231017rci05 p.10 ROUTING: INFERRED. No route guidance exists for Highland Park in any source. Authored from the plan's stated principle of directing outbound traffic away from the hazard, plus the Canada Games Centre as the main evacuation centre (HRM p.12)."
+    },
+    {
+      "id": "EA-3",
+      "issue_time_s": 15180,
+      "wall_clock": "19:41",
+      "areas": [
+        "outer_extension"
+      ],
+      "instruction": "evacuate_now",
+      "hazard_text": "Evacuation order extended to Haliburton Hills, Glen Arbour, Pockwock Rd, White Hills subdivision, Lucasville Rd all the way to Sackville Dr. This is in addition to the earlier evacuation orders. Take your pets with you when you evacuate.",
+      "comfort_centre": null,
+      "routing_text": "Leave by Lucasville Road to Sackville Drive and register at the Beaver Bank Kinsac Community Centre, which is open for the Lucasville area. Do not use Pockwock Road or the Hammonds Plains Road section west of the subdivision.",
+      "channel": "wireless_emergency_alert",
+      "source": "HRFE 240806rci01 p.16 (19:41:00 Update to NSEMO Alert); HRM 231017rci05 p.10 ROUTING: INFERRED. No route guidance exists for the wave-3 communities. Authored from the Beaver Bank Kinsac Community Centre opening for the Lucasville area (HRM p.12, deactivated first as it was not required) and the Lucasville Rd to Sackville Dr corridor named in the EA-3 broadcast itself."
+    }
+  ],
+  "door_to_door": {
+    "_comment": "M3 channel. RCMP began door-to-door evacuation of downwind residents ~14 min after ignition, ~90 min before the first broadcast alert. Sweep rate parameterized from the report timeline.",
+    "start_time_s": 840,
+    "wall_clock": "15:42",
+    "initial_areas": [
+      "westwood_hills"
+    ],
+    "sweep": [
+      {
+        "area": "westwood_hills",
+        "begin_s": 840,
+        "cleared_by_s": 3600,
+        "note": "By 16:28 (3000 s) Command directed RCMP to clear the subdivision (200 cars). HRFE p.13."
+      }
+    ],
+    "rate_note": "One subdivision took roughly 46 min of door-knocking before the broadcast order. Use as the default per-area sweep duration; expose as an M3 sensitivity knob.",
+    "source": "HRM 231017rci05 p.10 (15:42); HRFE 240806rci01 pp.12-13 (16:12 RCMP planning, 16:28 clear subdivision)"
+  }
+}

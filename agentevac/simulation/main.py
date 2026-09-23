@@ -99,7 +99,13 @@ from agentevac.agents.scenarios import (
     scenario_prompt_suffix,
     scenario_system_prompt,
 )
-from agentevac.agents.alert_schedule import AlertSchedule, NO_ALERT, effective_mode
+from agentevac.agents.alert_schedule import (
+    AlertSchedule,
+    NO_ALERT,
+    effective_mode,
+    route_advisory,
+    route_advisory_policy,
+)
 from agentevac.agents.neighborhood_observation import (
     build_neighbor_map,
     build_departure_observation_update,
@@ -351,6 +357,12 @@ SCENARIO_MODE = (CLI_ARGS.scenario or os.getenv("SCENARIO_MODE", "advice_guided"
 if SCENARIO_MODE not in SCENARIO_CHOICES:
     sys.exit(f"SCENARIO_MODE must be one of: {', '.join(SCENARIO_CHOICES)}.")
 SCENARIO_CONFIG = load_scenario_config(SCENARIO_MODE)
+# E2 tone switch.  The routing-content arm runs tone-matched against E0 so the added route
+# guidance is not confounded with directive exhortation.  Only the advice_guided regime
+# carries a tone, so this is inert in every other arm and in every legacy run.
+SCENARIO_TONE = os.getenv("SCENARIO_TONE", "directive").strip().lower()
+if SCENARIO_TONE not in ("directive", "neutral"):
+    sys.exit("SCENARIO_TONE must be 'directive' or 'neutral'.")
 
 # --- M1 alert-event engine: timed, area-scoped alert schedule ---
 # When a map ships an alerts.json, the information regime becomes per-agent and
@@ -368,9 +380,13 @@ ALERT_SCHEDULE = AlertSchedule.from_config(
     time_offset_s=ALERT_TIME_OFFSET_S,
     door_sweep_scale=DOOR_SWEEP_DURATION_SCALE,
 )
+_ALERT_ROUTING_EVENTS = sum(
+    1 for _ev in (_alerts_cfg or {}).get("schedule", []) if _ev.get("routing_text")
+)
 print(f"[ALERTS] active={ALERT_SCHEDULE_ACTIVE} "
       f"events={len((_alerts_cfg or {}).get('schedule', []))} offset_s={ALERT_TIME_OFFSET_S} "
-      f"door_sweep_scale={DOOR_SWEEP_DURATION_SCALE}")
+      f"door_sweep_scale={DOOR_SWEEP_DURATION_SCALE} "
+      f"routing_events={_ALERT_ROUTING_EVENTS} tone={SCENARIO_TONE}")
 
 
 def agent_alert_state(agent_id: str, sim_t_s: float):
@@ -393,7 +409,22 @@ def agent_scenario_mode(agent_id: str, sim_t_s: float) -> str:
     state = agent_alert_state(agent_id, sim_t_s)
     if state is None:
         return SCENARIO_MODE
-    return effective_mode(state)
+    mode = effective_mode(state)
+    if mode == "advice_guided" and SCENARIO_TONE == "neutral":
+        return "advice_guided_neutral"
+    return mode
+
+
+def agent_route_advisory(agent_id: str, sim_t_s: float) -> Optional[Dict[str, Any]]:
+    """E2 official route guidance reaching this agent, or None when none is visible.
+
+    Thin wrapper resolving the agent's alert state before handing off to the pure helper
+    in ``alert_schedule``.
+    """
+    state = agent_alert_state(agent_id, sim_t_s)
+    if state is None:
+        return None
+    return route_advisory(state)
 
 
 def institutional_order_weight(alert_state, theta_auth: float) -> float:
@@ -1718,10 +1749,19 @@ traci.start(Sumo_config)
 replay = RouteReplay(RUN_MODE, REPLAY_LOG_PATH)
 events = LiveEventStream(EVENTS_ENABLED, EVENTS_LOG_PATH, EVENTS_STDOUT)
 # Corridor edge sets for the egress-flow split are read from an optional corridors.json.
-# None are defined yet (a small data task deferred to E0 validation), so the flow split
-# reports empty until they are, per the Part J plan.
+# A config that ships none leaves the flow split empty, which is what every run before the
+# three-town screenlines did.
 _corridors_cfg = _MAP_CFG.get("corridors")
-_CORRIDOR_EDGES = _corridors_cfg if isinstance(_corridors_cfg, dict) else {}
+# Keys starting with an underscore carry provenance, matching the alerts.json convention,
+# so only the edge lists become corridors.
+_CORRIDOR_EDGES = {
+    _name: _edges
+    for _name, _edges in (_corridors_cfg if isinstance(_corridors_cfg, dict) else {}).items()
+    if not str(_name).startswith("_") and isinstance(_edges, list)
+}
+if _CORRIDOR_EDGES:
+    print(f"[CORRIDORS] {len(_CORRIDOR_EDGES)} defined: "
+          + ", ".join(f"{k}({len(v)})" for k, v in sorted(_CORRIDOR_EDGES.items())))
 # Distinct spawn edges and a seen-set drive the non-evacuee fire-reach companion count.
 # That companion count stays edge-keyed under both geometry bases, so it stays comparable
 # across the edge and building-centroid experiment batches.
@@ -2371,6 +2411,24 @@ def refresh_vehicle_subscriptions() -> None:
         _vehicle_sub_results = {}
 
 
+# Background traffic loaded from a route file shares the network with the agents but is
+# not part of the study population.  Those vehicles carry an id prefix so the agent-only
+# bookkeeping below can skip them.  Core metrics are already safe, because
+# ``record_arrival`` only accepts a vehicle that ``record_departure`` has seen and the
+# departure path runs for agents alone.
+BACKGROUND_VEH_PREFIX = os.getenv("BACKGROUND_VEH_PREFIX", "bg_")
+
+
+def is_background_vehicle(veh_id: str) -> bool:
+    """True for a vehicle inserted as background traffic, not a simulated household."""
+    return bool(BACKGROUND_VEH_PREFIX) and str(veh_id).startswith(BACKGROUND_VEH_PREFIX)
+
+
+def agent_vehicle_ids(veh_ids) -> List[str]:
+    """Drop background traffic from a TraCI vehicle-id list."""
+    return [v for v in veh_ids if not is_background_vehicle(v)]
+
+
 def vehicle_step_state(veh_id: str) -> Tuple[Any, Any, Any, Any]:
     """Return ``(position, angle, route, road_id)`` for one vehicle.
 
@@ -2870,6 +2928,7 @@ def process_pending_departures(step_idx: int):
                         "briefing": "Official forecast not yet available.",
                     }
             _eff_mode = agent_scenario_mode(vid, sim_t)
+            metrics.record_regime(vid, _eff_mode)
             prompt_env_signal, prompt_forecast = apply_scenario_to_signals(
                 _eff_mode, env_signal, _pd_forecast_payload,
             )
@@ -3315,6 +3374,7 @@ def process_pending_departures(step_idx: int):
 
             _s_vid = _sx["vid"]
             _dep_eff_mode = agent_scenario_mode(_s_vid, sim_t)
+            metrics.record_regime(_s_vid, _dep_eff_mode)
             _s_from = _sx["from_edge"]
             _s_agent = _sx["agent_state"]
             _s_belief = _sx.get("belief_state", {})
@@ -3476,12 +3536,23 @@ def process_pending_departures(step_idx: int):
                     ),
                 }
                 _util_pol = _util_basis.get(_dep_eff_mode, _util_basis["advice_guided"])
+                # E2: the guidance gate follows the menu the agent actually sees, which
+                # M1 resolves per agent.  E0 and E1 resolve to the same value the
+                # run-global config gave, so their prompts are unchanged.
+                _dep_guid_cfg = load_scenario_config(_dep_menu_scenario)
+                _dep_route_advisory = (
+                    None if _dep_inst_unavailable else agent_route_advisory(_s_vid, sim_t)
+                )
                 _guid_pol = (
                     "The Emergency Operations Center has assessed each option. "
                     "Follow options with advisory='Recommended'; fall back to 'Use with caution' only if no recommended option is reachable. "
                     "Avoid options marked 'Avoid for now' unless all alternatives are blocked. "
-                    if SCENARIO_CONFIG["official_route_guidance_visible"]
+                    if _dep_guid_cfg["official_route_guidance_visible"]
                     else "No official route recommendation is available in this scenario; infer safety from the visible route facts and your subjective information. "
+                ) + route_advisory_policy(
+                    _dep_route_advisory,
+                    load_scenario_config(_dep_eff_mode)["tone"],
+                    "option",
                 )
                 _fc_pol = (
                     "Use forecast.briefing and forecast.route_head to avoid options that may worsen within the forecast horizon. "
@@ -3604,6 +3675,8 @@ def process_pending_departures(step_idx: int):
                         + f"{scenario_prompt_suffix(_dep_eff_mode)}"
                     ),
                 }
+                if _dep_route_advisory:
+                    _dep_env["official_route_advisory"] = _dep_route_advisory
                 _dep_sys_prompt = scenario_system_prompt(_dep_eff_mode, "routing")
                 _dep_user_prompt = json.dumps(_dep_env)
 
@@ -3905,7 +3978,7 @@ def process_vehicles(step_idx: int):
         forecast_risk_cache[edge_id] = out
         return out
 
-    vehicles_list = traci.vehicle.getIDList()
+    vehicles_list = agent_vehicle_ids(traci.vehicle.getIDList())
 
     # Per-step vehicle state, served from the step's subscription snapshot.
     for vehicle in vehicles_list:
@@ -3921,6 +3994,11 @@ def process_vehicles(step_idx: int):
             if _edge_trace_last.get(vehicle) != roadid:
                 _edge_trace_last[vehicle] = roadid
                 _edge_trace.setdefault(vehicle, []).append(roadid)
+                # Corridor screenlines are counted here, on every edge change, since the
+                # decision-round exposure sample sees a vehicle about once per kilometre
+                # and would miss most crossings.
+                if not is_background_vehicle(vehicle):
+                    metrics.record_edge_entered(vehicle, roadid)
 
         # --- Edge-trace replay: apply recorded trace on first sight ---
         if RUN_MODE == "replay" and vehicle not in _replay_trace_applied:
@@ -4000,6 +4078,7 @@ def process_vehicles(step_idx: int):
             vtype = traci.vehicle.getTypeID(vehicle)
             history_recent = _history_for_agent(vehicle)
             _eff_mode = agent_scenario_mode(vehicle, sim_t_s)
+            metrics.record_regime(vehicle, _eff_mode)
             history_for_prompt = filter_history_for_scenario(_eff_mode, history_recent)
             prev_margin_m = None
             if history_recent:
@@ -4464,12 +4543,20 @@ def process_vehicles(step_idx: int):
                         ),
                     }
                     utility_policy = _utility_basis.get(_eff_mode, _utility_basis["advice_guided"])
+                    _guid_cfg = load_scenario_config(
+                        "no_notice" if _inst_unavailable else _eff_mode
+                    )
+                    route_advisory = (
+                        None if _inst_unavailable else agent_route_advisory(vehicle, sim_t_s)
+                    )
                     guidance_policy = (
                         "The Emergency Operations Center has assessed each option. "
                         "Follow options with advisory='Recommended'; fall back to 'Use with caution' only if no recommended option is reachable. "
                         "Avoid options marked 'Avoid for now' unless all alternatives are blocked. "
-                        if SCENARIO_CONFIG["official_route_guidance_visible"]
+                        if _guid_cfg["official_route_guidance_visible"]
                         else "No official route recommendation is available in this scenario; infer safety from the visible route facts and your subjective information. "
+                    ) + route_advisory_policy(
+                        route_advisory, load_scenario_config(_eff_mode)["tone"], "option",
                     )
                     forecast_policy = (
                         "Use forecast.briefing and forecast.route_head to avoid options that may worsen within the forecast horizon. "
@@ -4601,6 +4688,8 @@ def process_vehicles(step_idx: int):
                             f"{scenario_prompt_suffix(_eff_mode)}"
                         ),
                     }
+                    if route_advisory:
+                        env["official_route_advisory"] = route_advisory
                     system_prompt = scenario_system_prompt(_eff_mode, "routing")
                     user_prompt = json.dumps(env)
                 else:
@@ -4774,12 +4863,20 @@ def process_vehicles(step_idx: int):
                         ),
                     }
                     utility_policy = _rt_utility_basis.get(_eff_mode, _rt_utility_basis["advice_guided"])
+                    _guid_cfg = load_scenario_config(
+                        "no_notice" if _inst_unavailable_rt else _eff_mode
+                    )
+                    route_advisory = (
+                        None if _inst_unavailable_rt else agent_route_advisory(vehicle, sim_t_s)
+                    )
                     guidance_policy = (
                         "The Emergency Operations Center has assessed each route. "
                         "Follow routes with advisory='Recommended'; fall back to 'Use with caution' only if no recommended route is reachable. "
                         "Avoid routes marked 'Avoid for now' unless all alternatives are blocked. "
-                        if SCENARIO_CONFIG["official_route_guidance_visible"]
+                        if _guid_cfg["official_route_guidance_visible"]
                         else "No official route recommendation is available in this scenario; explain your choice using only the visible route facts and subjective information. "
+                    ) + route_advisory_policy(
+                        route_advisory, load_scenario_config(_eff_mode)["tone"], "route",
                     )
                     forecast_policy = (
                         "Use forecast.briefing and forecast.route_head to avoid routes that may worsen within the forecast horizon. "
@@ -4909,6 +5006,8 @@ def process_vehicles(step_idx: int):
                             f"{scenario_prompt_suffix(_eff_mode)}"
                         ),
                     }
+                    if route_advisory:
+                        env["official_route_advisory"] = route_advisory
                     system_prompt = scenario_system_prompt(_eff_mode, "routing")
                     user_prompt = json.dumps(env)
                 else:
@@ -5622,7 +5721,7 @@ try:
                     sim_t_s=sim_t,
                     step_idx=step_idx,
                 )
-        active_vehicle_ids = list(traci.vehicle.getIDList())
+        active_vehicle_ids = agent_vehicle_ids(traci.vehicle.getIDList())
         _refresh_active_agent_live_status(sim_t, active_vehicle_ids)
         metrics.observe_active_vehicles(active_vehicle_ids, sim_t)
         # Early termination: stop when all agents arrived at their destination

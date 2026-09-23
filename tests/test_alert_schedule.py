@@ -9,6 +9,8 @@ from agentevac.agents.alert_schedule import (
     AlertSchedule,
     NO_ALERT,
     effective_mode,
+    route_advisory,
+    route_advisory_policy,
 )
 
 
@@ -191,3 +193,128 @@ def test_parses_real_e0_schedule():
     # Outer extension ordered only at EA-3 (15180 s).
     assert sched.active_for_edge(15179, outer_edge) == NO_ALERT
     assert sched.active_for_edge(15180, outer_edge).received
+
+
+# --- E2 routing arm -------------------------------------------------------------
+
+
+def test_route_advisory_is_none_without_routing_text():
+    """E0 and E1 leave routing_text null, so no advisory block reaches any prompt."""
+    sched = AlertSchedule.from_config(_toy_config())
+    assert route_advisory(sched.active_for_edge(6300, "w0")) is None
+    assert route_advisory(NO_ALERT) is None
+
+
+def test_route_advisory_carries_text_and_provenance():
+    cfg = _toy_config()
+    cfg["schedule"][0]["routing_text"] = "Turn right at Hammonds Plains Rd"
+    sched = AlertSchedule.from_config(cfg)
+    adv = route_advisory(sched.active_for_edge(6300, "w0"))
+    assert adv["guidance"] == "Turn right at Hammonds Plains Rd"
+    assert adv["alert_id"] == "EA-1"
+    assert adv["source"] == "official_alert"
+    assert adv["channel"] == "wireless_emergency_alert"
+    assert adv["received_t_s"] == 6300
+    assert adv["comfort_centre"] == "Black Point"
+
+
+def test_route_advisory_none_before_the_order_issues():
+    cfg = _toy_config()
+    cfg["schedule"][0]["routing_text"] = "Turn right at Hammonds Plains Rd"
+    sched = AlertSchedule.from_config(cfg)
+    assert route_advisory(sched.active_for_edge(6299, "w0")) is None
+
+
+def test_route_advisory_none_when_instruction_is_none():
+    """Hazard-only (E3) carries no order block, so no route advisory either."""
+    cfg = _toy_config()
+    cfg["schedule"][0]["instruction"] = "none"
+    cfg["schedule"][0]["routing_text"] = "Turn right at Hammonds Plains Rd"
+    sched = AlertSchedule.from_config(cfg)
+    state = sched.active_for_edge(6300, "w0")
+    assert state.order_text is None
+    assert route_advisory(state) is None
+
+
+def test_route_advisory_policy_empty_without_advisory():
+    assert route_advisory_policy(None, "neutral", "option") == ""
+    assert route_advisory_policy({}, "directive", "route") == ""
+
+
+def test_route_advisory_policy_tone_and_unit():
+    adv = {"guidance": "x"}
+    neutral = route_advisory_policy(adv, "neutral", "option")
+    directive = route_advisory_policy(adv, "directive", "route")
+    assert "official_route_advisory" in neutral and "official_route_advisory" in directive
+    assert "Weigh it alongside the visible option facts" in neutral
+    assert "Follow it unless a visible route fact makes it unsafe" in directive
+    assert "Follow" not in neutral
+
+
+# --- per-household routing branches (the Westwood Hills two-exit split) ------------
+
+
+def _branched_config():
+    """Toy schedule whose first order splits its area between two egress roads."""
+    cfg = _toy_config()
+    cfg["schedule"][0]["routing_text"] = "Area-wide fallback guidance"
+    cfg["schedule"][0]["routing_branches"] = [
+        {"id": "north_rd", "label": "North Road", "edges": ["w0"],
+         "comfort_centre": "North Centre", "text": "Leave by North Road, turn right."},
+        {"id": "south_rd", "label": "South Road", "edges": ["w1"],
+         "text": "Leave by South Road, turn left."},
+    ]
+    return cfg
+
+
+def test_branch_text_wins_over_area_guidance():
+    sched = AlertSchedule.from_config(_branched_config())
+    adv = route_advisory(sched.active_for_edge(6300, "w0"))
+    assert adv["guidance"] == "Leave by North Road, turn right."
+    assert adv["applies_to"] == "North Road"
+
+
+def test_each_side_hears_only_its_own_instruction():
+    sched = AlertSchedule.from_config(_branched_config())
+    north = route_advisory(sched.active_for_edge(6300, "w0"))
+    south = route_advisory(sched.active_for_edge(6300, "w1"))
+    assert north["guidance"] != south["guidance"]
+    assert "North Road" in north["guidance"] and "North Road" not in south["guidance"]
+
+
+def test_uncovered_edge_falls_back_to_area_guidance():
+    """w2 is in the area but in neither branch, so it hears the area-wide text."""
+    sched = AlertSchedule.from_config(_branched_config())
+    adv = route_advisory(sched.active_for_edge(6300, "w2"))
+    assert adv["guidance"] == "Area-wide fallback guidance"
+    assert "applies_to" not in adv
+
+
+def test_branch_comfort_centre_overrides_the_order_centre():
+    sched = AlertSchedule.from_config(_branched_config())
+    assert route_advisory(sched.active_for_edge(6300, "w0"))["comfort_centre"] == "North Centre"
+
+
+def test_branch_without_a_centre_keeps_the_order_centre():
+    sched = AlertSchedule.from_config(_branched_config())
+    assert route_advisory(sched.active_for_edge(6300, "w1"))["comfort_centre"] == "Black Point"
+
+
+def test_branches_alone_make_routing_visible():
+    """An order whose guidance is entirely per-household still resolves to advice_guided."""
+    cfg = _branched_config()
+    cfg["schedule"][0]["routing_text"] = None
+    sched = AlertSchedule.from_config(cfg)
+    covered = sched.active_for_edge(6300, "w0")
+    assert covered.routing_visible
+    assert effective_mode(covered) == "advice_guided"
+    # w2 is in no branch and the area text is gone, so nothing reaches it.
+    assert route_advisory(sched.active_for_edge(6300, "w2")) is None
+
+
+def test_branch_with_empty_text_is_dropped():
+    cfg = _branched_config()
+    cfg["schedule"][0]["routing_branches"][0]["text"] = ""
+    sched = AlertSchedule.from_config(cfg)
+    adv = route_advisory(sched.active_for_edge(6300, "w0"))
+    assert adv["guidance"] == "Area-wide fallback guidance"

@@ -123,6 +123,11 @@ class RunMetricsCollector:
                 self._agent_order[_agent] = _ordered_edge_index[_edge]
         # First-awareness instant and source per agent (promoted from M2).
         self._awareness: Dict[str, Dict[str, Any]] = {}
+        # Resolved per-agent information regime, counted per decision resolution and
+        # as the set of agents that ever reached each regime.  Identifies the E2
+        # routing arm in the output, where ordered households resolve to advice_guided.
+        self._regime_rounds: Dict[str, int] = {}
+        self._regime_agents: Dict[str, Set[str]] = {}
         # Spawn edges the fire has crossed, and when, for the non-evacuee companion count.
         self._fire_reached_edges: Dict[str, float] = {}
         # Time margin: per home edge, the interpolated fire-arrival instant, the closest the
@@ -365,10 +370,23 @@ class RunMetricsCollector:
         self._exposure_by_agent_count[agent_id] = self._exposure_by_agent_count.get(agent_id, 0) + 1
         if current_margin_m is not None and current_margin_m <= 0.0:
             self._fire_contact_agents.add(agent_id)
-        # Egress-flow split: count each distinct evacuating agent seen on a corridor edge.
-        for corridor in self._corridor_edge_index.get(str(current_edge), ()):
-            self._corridor_agents[corridor].add(agent_id)
         self._last_seen_time[agent_id] = float(sim_t_s)
+
+    def record_edge_entered(self, agent_id: str, edge_id: str) -> None:
+        """Record that an agent entered ``edge_id``, for the egress-flow split.
+
+        Called on every edge change, so a screenline of one or two edges is not missed.
+        Sampling at the decision round instead would observe a vehicle roughly once per
+        kilometre of travel and undercount every crossing.
+
+        Args:
+            agent_id: Vehicle ID.
+            edge_id: SUMO edge the vehicle just entered.
+        """
+        if not self.enabled:
+            return
+        for corridor in self._corridor_edge_index.get(str(edge_id), ()):
+            self._corridor_agents[corridor].add(agent_id)
 
     def record_awareness(self, agent_id: str, sim_t_s: float, source: str) -> None:
         """Record an agent's first-awareness instant and source (promoted from M2).
@@ -386,6 +404,20 @@ class RunMetricsCollector:
         if agent_id in self._awareness:
             return
         self._awareness[agent_id] = {"t_s": float(sim_t_s), "source": str(source)}
+
+    def record_regime(self, agent_id: str, mode: str) -> None:
+        """Record the information regime an agent resolved to for one decision.
+
+        Args:
+            agent_id: Vehicle ID.
+            mode: Resolved regime, e.g. ``no_notice``, ``alert_guided``,
+                ``advice_guided`` or ``advice_guided_neutral``.
+        """
+        if not self.enabled:
+            return
+        key = str(mode)
+        self._regime_rounds[key] = self._regime_rounds.get(key, 0) + 1
+        self._regime_agents.setdefault(key, set()).add(str(agent_id))
 
     def record_fire_reached_edge(self, edge_id: str, sim_t_s: float) -> None:
         """Record the first time the fire crosses ``edge_id`` (fire margin <= 0).
@@ -716,6 +748,45 @@ class RunMetricsCollector:
             }
         return out
 
+    def compute_area_evacuation_time(self) -> Dict[str, Any]:
+        """Compute per-area evacuation time, from the order instant to the last arrival.
+
+        This is the quantity a buffer-alerting policy has to cover, since a buffer sized on
+        departures alone leaves out the drive.  :meth:`compute_area_clearance` reports the
+        last departure and is therefore a lower bound on the same window.
+
+        ``t_evac_s`` is ``None`` when the area has no order time, or when some ordered
+        household never arrived, because an unfinished evacuation has no finish time and
+        reporting the last arrival so far would understate it.
+
+        Returns:
+            Dict mapping area to ``{ordered, arrived, fully_arrived, order_t_s,
+            last_arrival_t_s, t_evac_s}``.
+        """
+        members: Dict[str, List[str]] = {}
+        for agent_id, (area, _channel) in self._agent_order.items():
+            members.setdefault(area, []).append(agent_id)
+
+        out: Dict[str, Any] = {}
+        for area, spec in self._ordered_areas.items():
+            area_members = members.get(area, [])
+            arrivals = [self._arrival_times[a] for a in area_members if a in self._arrival_times]
+            n_ordered, n_arrived = len(area_members), len(arrivals)
+            fully = bool(n_ordered > 0 and n_arrived == n_ordered)
+            order_t = spec.get("order_t_s")
+            last_arrival = round(max(arrivals), 2) if arrivals else None
+            t_evac = (round(last_arrival - float(order_t), 2)
+                      if (fully and order_t is not None and last_arrival is not None) else None)
+            out[area] = {
+                "ordered": n_ordered,
+                "arrived": n_arrived,
+                "fully_arrived": fully,
+                "order_t_s": order_t,
+                "last_arrival_t_s": last_arrival,
+                "t_evac_s": t_evac,
+            }
+        return out
+
     def compute_awareness_source_share(self) -> Dict[str, Any]:
         """Compute the share of first awareness by channel and the aware count.
 
@@ -730,8 +801,29 @@ class RunMetricsCollector:
         share = {s: (c / float(total)) for s, c in counts.items()} if total > 0 else {}
         return {"counts": counts, "share": share, "n_aware": total}
 
+    def compute_regime_share(self) -> Dict[str, Any]:
+        """Summarize which information regimes agents actually decided under.
+
+        Returns:
+            Dict with ``decision_resolutions`` per regime, ``agents_ever`` per regime,
+            and ``resolution_share`` normalized over all resolutions.
+        """
+        total = sum(self._regime_rounds.values())
+        return {
+            "decision_resolutions": {k: v for k, v in sorted(self._regime_rounds.items())},
+            "agents_ever": {k: len(v) for k, v in sorted(self._regime_agents.items())},
+            "resolution_share": {
+                k: round(v / float(total), 6) for k, v in sorted(self._regime_rounds.items())
+            } if total else {},
+        }
+
     def compute_corridor_flow(self) -> Dict[str, Any]:
-        """Compute the distinct evacuating agents seen on each corridor's edges.
+        """Compute the distinct evacuating agents that crossed each corridor.
+
+        Fed by :meth:`record_edge_entered` on every edge change, so a crossing is counted
+        whatever the vehicle's speed.  Agent ids are reported so a run can be
+        cross-tabulated by spawn area, which is what turns the split into a per-community
+        result.
 
         Returns:
             Dict mapping corridor name to ``{agents, agent_ids}``.  Empty when no corridor
@@ -911,9 +1003,11 @@ class RunMetricsCollector:
             "mobilization_delay": self.compute_mobilization_delay(),
             "compliance": self.compute_order_compliance(),
             "awareness_source_share": self.compute_awareness_source_share(),
+            "regime_share": self.compute_regime_share(),
             "n_aware": len(self._awareness),
             "n_never_aware": max(0, self.total_agents - len(self._awareness)),
             "area_clearance": self.compute_area_clearance(),
+            "area_evacuation_time": self.compute_area_evacuation_time(),
             "corridor_flow": self.compute_corridor_flow(),
             "non_evacuated_reached_by_fire": self.compute_non_evacuated_reached_by_fire(),
             # Time margin turns the exposure index into minutes of headroom per household,

@@ -23,7 +23,7 @@ on its spawn edge.  Orders are cumulative, so once an area is ordered it stays o
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 
 # Instruction strength ordering.  When several covering orders overlap an agent's area,
@@ -45,7 +45,13 @@ class AlertEvent:
         areas: Newly ordered areas, cumulative across events.
         instruction: ``none`` | ``evacuate_now`` | ``shelter_in_place``.
         hazard_text: Near-verbatim bundled hazard and directive text.
-        routing_text: Route guidance, ``None`` for the historical E0 orders.
+        routing_text: Route guidance for the whole area, ``None`` for the historical E0
+            orders.  A household covered by a routing branch gets the branch text instead.
+        routing_branches: Per-household route guidance, as
+            ``(label, edges, text, comfort_centre)`` tuples.
+            The Westwood Hills plan splits a subdivision at its two exits and gives each
+            side a different instruction, so guidance is not always uniform across an area.
+            Empty for an order whose guidance is the same for everyone.
         comfort_centre: Named destination, present only when the order named one.
         channel: Delivery channel, for example ``"wireless_emergency_alert"``.
     """
@@ -58,6 +64,22 @@ class AlertEvent:
     routing_text: Optional[str]
     comfort_centre: Optional[str]
     channel: str
+    routing_branches: Tuple[Tuple[str, FrozenSet[str], str, Optional[str]], ...] = ()
+
+    def routing_for_edge(
+        self, edge_id: str
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Return ``(guidance_text, branch_label, comfort_centre)`` for ``edge_id``.
+
+        A branch covering the edge wins, so each side of a split subdivision hears only its
+        own instruction and, where the plan sends the two sides to different reception
+        centres, only its own destination.  Otherwise the area-wide ``routing_text`` and the
+        order's own ``comfort_centre`` apply, with no label.
+        """
+        for label, edges, text, centre in self.routing_branches:
+            if edge_id in edges:
+                return text, label, centre or self.comfort_centre
+        return self.routing_text, None, self.comfort_centre
 
 
 @dataclass(frozen=True)
@@ -111,6 +133,72 @@ def effective_mode(state: AlertState) -> str:
     if state.routing_visible:
         return "advice_guided"
     return "alert_guided"
+
+
+def route_advisory(state: AlertState) -> Optional[Dict[str, Any]]:
+    """Return the official route-guidance block reaching an agent, or ``None``.
+
+    E0 and E1 leave ``routing_text`` null on every event, so this is ``None`` there and no
+    routing block is added to any prompt.  The E2 arm populates it, which is also what
+    makes :func:`effective_mode` resolve to ``advice_guided``.
+
+    The text comes from the operative order, meaning the strongest covering instruction
+    with ties broken to the earliest issue.  Under the cumulative area rule a later event
+    that re-covers an already ordered area does not displace the earlier order, so a
+    household keeps the guidance of the alert that first covered it.
+
+    Args:
+        state: The resolved alert state for an agent.
+
+    Returns:
+        A dict with the guidance text and its provenance, or ``None`` when the agent has
+        no order carrying route guidance.
+    """
+    order_text = state.order_text or {}
+    guidance = order_text.get("routing_text")
+    if not guidance:
+        return None
+    advisory = {
+        "source": "official_alert",
+        "alert_id": order_text.get("id"),
+        "channel": order_text.get("channel"),
+        "received_t_s": order_text.get("received_t_s"),
+        "guidance": str(guidance),
+        "comfort_centre": order_text.get("comfort_centre"),
+    }
+    branch = order_text.get("routing_branch")
+    if branch:
+        # Which side of a split subdivision this household is on, so the guidance reads as
+        # addressed to it and the realised choice can be scored against the branch.
+        advisory["applies_to"] = branch
+    return advisory
+
+
+def route_advisory_policy(
+    advisory: Optional[Dict[str, Any]], tone: str, unit: str
+) -> str:
+    """Build the prompt clause that points an agent at its official route guidance.
+
+    Empty when no guidance reaches the agent, so E0, E1 and every legacy run keep their
+    policy text unchanged.
+
+    Args:
+        advisory: The block from :func:`route_advisory`, or ``None``.
+        tone: ``"directive"`` or ``"neutral"``, following the arm.
+        unit: ``"option"`` or ``"route"``, matching the menu the decision is made over.
+
+    Returns:
+        The clause to append to the guidance policy, or an empty string.
+    """
+    if not advisory:
+        return ""
+    lead = (
+        "official_route_advisory carries the route guidance the emergency alert broadcast "
+        "for your area. "
+    )
+    if tone == "neutral":
+        return lead + f"Weigh it alongside the visible {unit} facts when you choose. "
+    return lead + f"Follow it unless a visible {unit} fact makes it unsafe. "
 
 
 class AlertSchedule:
@@ -194,6 +282,16 @@ class AlertSchedule:
                     routing_text=ev.get("routing_text"),
                     comfort_centre=ev.get("comfort_centre"),
                     channel=str(ev.get("channel", "")),
+                    routing_branches=tuple(
+                        (
+                            str(br.get("label", br.get("id", ""))),
+                            frozenset(str(e) for e in (br.get("edges") or ())),
+                            str(br.get("text", "")),
+                            br.get("comfort_centre"),
+                        )
+                        for br in (ev.get("routing_branches") or ())
+                        if br.get("text")
+                    ),
                 )
             )
 
@@ -251,17 +349,21 @@ class AlertSchedule:
             key=lambda e: (_INSTRUCTION_PRIORITY.get(e.instruction, 0), -e.issue_time_s),
         )
         instruction = operative.instruction
-        routing_visible = any(bool(e.routing_text) for e in covering)
+        # Guidance resolves per household, since a split subdivision gives each side its
+        # own instruction, so visibility is asked of this edge and not of the area.
+        routing_visible = any(bool(e.routing_for_edge(edge_id)[0]) for e in covering)
 
         order_text: Optional[Dict[str, Any]] = None
         if _INSTRUCTION_PRIORITY.get(instruction, 0) > 0:
             # A departure-driving order is active; bundle it for the belief channel.
+            guidance, branch, centre = operative.routing_for_edge(edge_id)
             order_text = {
                 "id": operative.id,
                 "instruction": instruction,
                 "hazard_text": operative.hazard_text,
-                "comfort_centre": operative.comfort_centre,
-                "routing_text": operative.routing_text,
+                "comfort_centre": centre,
+                "routing_text": guidance,
+                "routing_branch": branch,
                 "channel": operative.channel,
                 "received_t_s": received_t_s,
             }

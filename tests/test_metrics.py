@@ -784,3 +784,140 @@ class TestTimeMarginInSummaryExtras:
                 c.record_fire_reached_edge("e_a", t_s)
         assert c._fire_reached_edges["e_a"] == pytest.approx(240.0)
         assert c.compute_non_evacuated_reached_by_fire()["agent_ids"] == ["a"]
+
+
+class TestRegimeShare:
+    """The resolved per-agent information regime, which identifies the E2 routing arm."""
+
+    def test_empty_when_nothing_recorded(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        share = c.compute_regime_share()
+        assert share["decision_resolutions"] == {}
+        assert share["agents_ever"] == {}
+        assert share["resolution_share"] == {}
+
+    def test_counts_resolutions_and_distinct_agents(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_regime("v1", "no_notice")
+        c.record_regime("v1", "alert_guided")
+        c.record_regime("v2", "alert_guided")
+        c.record_regime("v2", "alert_guided")
+        share = c.compute_regime_share()
+        assert share["decision_resolutions"] == {"alert_guided": 3, "no_notice": 1}
+        assert share["agents_ever"] == {"alert_guided": 2, "no_notice": 1}
+        assert share["resolution_share"]["alert_guided"] == pytest.approx(0.75)
+
+    def test_advice_guided_neutral_is_kept_distinct(self, tmp_path):
+        """E2 runs tone-matched, so the neutral arm has to stay visible in the output."""
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_regime("v1", "advice_guided_neutral")
+        share = c.compute_regime_share()
+        assert share["agents_ever"] == {"advice_guided_neutral": 1}
+
+    def test_disabled_collector_is_noop(self, tmp_path):
+        c = _make_collector(enabled=False, tmp_dir=str(tmp_path))
+        c.record_regime("v1", "advice_guided")
+        assert c.compute_regime_share()["decision_resolutions"] == {}
+
+    def test_summary_carries_regime_share(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        c.record_regime("v1", "advice_guided")
+        assert c.summary()["regime_share"]["agents_ever"] == {"advice_guided": 1}
+
+
+class TestCorridorFlow:
+    """The egress-flow split, fed by every edge change and not by the decision-round sample."""
+
+    def _collector(self, tmp_path):
+        import os, tempfile
+        from agentevac.analysis.metrics import RunMetricsCollector
+        return RunMetricsCollector(
+            enabled=True, base_path=os.path.join(str(tmp_path), "m.json"), run_mode="record",
+            corridor_edges={"west": ["w1", "w2"], "east": ["e1"]},
+        )
+
+    def test_empty_without_configured_corridors(self, tmp_path):
+        c = _make_collector(tmp_dir=str(tmp_path))
+        assert c.compute_corridor_flow() == {}
+
+    def test_configured_corridors_start_at_zero(self, tmp_path):
+        flow = self._collector(tmp_path).compute_corridor_flow()
+        assert flow["west"]["agents"] == 0 and flow["east"]["agents"] == 0
+
+    def test_counts_each_agent_once_per_corridor(self, tmp_path):
+        c = self._collector(tmp_path)
+        c.record_edge_entered("v1", "w1")
+        c.record_edge_entered("v1", "w2")     # same corridor, still one agent
+        c.record_edge_entered("v2", "w2")
+        c.record_edge_entered("v2", "e1")     # v2 crosses both
+        flow = c.compute_corridor_flow()
+        assert flow["west"]["agents"] == 2
+        assert flow["east"]["agent_ids"] == ["v2"]
+
+    def test_edges_outside_every_corridor_are_ignored(self, tmp_path):
+        c = self._collector(tmp_path)
+        c.record_edge_entered("v1", "somewhere_else")
+        assert c.compute_corridor_flow()["west"]["agents"] == 0
+
+    def test_exposure_sampling_no_longer_feeds_the_split(self, tmp_path):
+        """A 240 s sample sees a vehicle about once per kilometre, so it cannot be the source."""
+        c = self._collector(tmp_path)
+        c.record_exposure_sample(agent_id="v1", sim_t_s=1.0, current_edge="w1",
+                                 current_margin_m=None, risk_score=0.0)
+        assert c.compute_corridor_flow()["west"]["agents"] == 0
+
+    def test_disabled_collector_is_noop(self, tmp_path):
+        import os
+        from agentevac.analysis.metrics import RunMetricsCollector
+        c = RunMetricsCollector(enabled=False, base_path=os.path.join(str(tmp_path), "m.json"),
+                                run_mode="record", corridor_edges={"west": ["w1"]})
+        c.record_edge_entered("v1", "w1")
+        assert c.compute_corridor_flow()["west"]["agents"] == 0
+
+
+class TestAreaEvacuationTime:
+    """Order to last arrival per area, which is what a buffer policy has to cover."""
+
+    def _collector(self, tmp_path):
+        import os
+        from agentevac.analysis.metrics import RunMetricsCollector
+        return RunMetricsCollector(
+            enabled=True, base_path=os.path.join(str(tmp_path), "m.json"), run_mode="record",
+            ordered_areas={"north": {"order_t_s": 100.0, "channel": "broadcast",
+                                     "edges": ["n1", "n2"]}},
+            spawn_edge_by_agent={"v1": "n1", "v2": "n2"},
+        )
+
+    def test_t_evac_spans_the_order_to_the_last_arrival(self, tmp_path):
+        c = self._collector(tmp_path)
+        for vid, dep, arr in (("v1", 150.0, 400.0), ("v2", 160.0, 700.0)):
+            c.record_departure(vid, dep)
+            c.record_arrival(vid, arr)
+        north = c.compute_area_evacuation_time()["north"]
+        assert north["fully_arrived"] is True
+        assert north["last_arrival_t_s"] == pytest.approx(700.0)
+        assert north["t_evac_s"] == pytest.approx(600.0)
+
+    def test_t_evac_is_none_while_a_household_is_still_travelling(self, tmp_path):
+        """An unfinished evacuation has no finish time, so it must not report one."""
+        c = self._collector(tmp_path)
+        c.record_departure("v1", 150.0)
+        c.record_arrival("v1", 400.0)
+        c.record_departure("v2", 160.0)
+        north = c.compute_area_evacuation_time()["north"]
+        assert north["arrived"] == 1 and north["ordered"] == 2
+        assert north["fully_arrived"] is False
+        assert north["t_evac_s"] is None
+
+    def test_exceeds_the_departure_based_clearance(self, tmp_path):
+        """Clearance reads departures only, so it is a lower bound on the same window."""
+        c = self._collector(tmp_path)
+        for vid, dep, arr in (("v1", 150.0, 400.0), ("v2", 160.0, 700.0)):
+            c.record_departure(vid, dep)
+            c.record_arrival(vid, arr)
+        clearance = c.compute_area_clearance()["north"]["clearance_t_s"]
+        assert clearance == pytest.approx(160.0)
+        assert c.compute_area_evacuation_time()["north"]["last_arrival_t_s"] > clearance
+
+    def test_summary_carries_the_metric(self, tmp_path):
+        assert "area_evacuation_time" in self._collector(tmp_path).summary()
