@@ -28,17 +28,17 @@
     "buffer_policy": {
       "safety_factor": 1.0,
       "t_evac_s": {
-        "highland_park": 2779.6,
-        "outer_extension": 3579.6,
-        "westwood_hills": 1902.8
+        "highland_park": 5195.6,
+        "outer_extension": 6756.4,
+        "westwood_hills": 5341.6
       },
       "buffer_m": {
-        "highland_park": 800,
+        "highland_park": 1250,
         "outer_extension": 450,
         "westwood_hills": null
       },
       "trigger_t_s": {
-        "highland_park": 7440,
+        "highland_park": 3660,
         "outer_extension": 13890,
         "westwood_hills": 0
       },
@@ -139,7 +139,7 @@
     },
     {
       "id": "EA-2",
-      "issue_time_s": 7440,
+      "issue_time_s": 3660,
       "wall_clock": null,
       "areas": [
         "highland_park"
@@ -151,7 +151,7 @@
       "channel": "wireless_emergency_alert",
       "source": "BUFFER POLICY. Issued when the fire margin fell to the buffer sized for highland_park. Areas, instruction, hazard text and channel are the historical event EA-2. Compiled by scripts/derive_buffer_schedule.py.",
       "buffer_m": {
-        "highland_park": 800
+        "highland_park": 1250
       },
       "buffer_feasible": {
         "highland_park": true

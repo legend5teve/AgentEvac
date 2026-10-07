@@ -11,17 +11,18 @@ community can finish evacuating before the fire arrives.
 
 | Community | Evacuation time | Buffer | Alert fires | Historical | Moved earlier by |
 |---|---|---|---|---|---|
-| Westwood Hills | 1903 s | none fits | 0 s | 6300 s | 105 min |
-| Highland Park | 2780 s | 800 m | 7440 s | 9660 s | 37 min |
-| Outer extension | 3580 s | 450 m | 13890 s | 15180 s | 22 min |
+| Westwood Hills | 5342 s | none fits | 0 s | 6300 s | 105 min |
+| Highland Park | 5196 s | 1250 m | 3660 s | 9660 s | 100 min |
+| Outer extension | 6756 s | 450 m | 13890 s | 15180 s | 22 min |
 
 Evacuation time is the span from a community being ordered to its last household arriving,
-taken as the worst of the three E0 seeds, because a buffer that covers only the median
-leaves half the runs short. It is the `area_evacuation_time` metric, recovered for the E0
-runs from their timeline exports since those runs predate the metric.
+which is the `area_evacuation_time` metric. The sizing is done in passes. The first pass
+took the worst of the three E0 seeds. This config is the second pass, which takes the worst
+of three rule-based seeds run on the first pass's schedule. The worst seed is used because a
+buffer that covers only the median leaves half the runs short.
 
 Westwood Hills has no feasible buffer. The fire is 184 m away at ignition and reaches the
-subdivision at 480 s, against an evacuation time of 1903 s. Its trigger is set to 0 s, which
+subdivision at 480 s, against an evacuation time of 5342 s. Its trigger is set to 0 s, which
 is the earliest the policy can act, and the config records it as infeasible.
 
 ## Why it compiles to timed events
@@ -31,7 +32,13 @@ burning edge is exact arithmetic at any instant. The trigger times are therefore
 offline and written as ordinary `issue_time_s` values. The alert resolver stays pure and
 SUMO-free, replay stays bit-identical, and the arm needs no engine change.
 
-Regenerate with `python scripts/derive_buffer_schedule.py --write configs/halifax_3town_e0_buffer`.
+Regenerate this pass from the first pass's rule-based runs with the command below.
+
+```bash
+python scripts/derive_buffer_schedule.py \
+  --runs "outputs/E5/e5_buffer/rule_based_seed*/run_metrics_*.json" \
+  --write configs/halifax_3town_e0_buffer
+```
 
 ## Known limits
 
