@@ -1,6 +1,6 @@
 # P3. M3 door-to-door and the per-run timeline export
 
-Design source `docs/jason_0611_response_assessment.md` Part E for M3 and Part D.7 for the timeline export. Depends on [M1](01_m1_alert_engine.md), [C.7](02_c7_belief_compliance.md), and [M2](03_m2_staggered_awareness.md).
+Design source, Part E of the private design assessment for M3 and its Part D.7 for the timeline export. Depends on [M1](01_m1_alert_engine.md), [C.7](02_c7_belief_compliance.md), and [M2](03_m2_staggered_awareness.md).
 
 ## Part 1. M3 door-to-door
 

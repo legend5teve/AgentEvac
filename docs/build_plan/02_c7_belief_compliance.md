@@ -1,6 +1,6 @@
 # P1b. C.7 belief-only compliance
 
-Design source `docs/jason_0611_response_assessment.md` Part C.7. Co-developed with [M1 alert engine](01_m1_alert_engine.md), which supplies the active-order flag and channel weight. This is decision 1, locked to belief-only.
+Design source, Part C.7 of the private design assessment. Co-developed with [M1 alert engine](01_m1_alert_engine.md), which supplies the active-order flag and channel weight. This is decision 1, locked to belief-only.
 
 ## Goal
 
@@ -12,7 +12,7 @@ As the code stands an order is absolute. The predeparture policy makes a MANDATO
 
 Belief-only routes the order through the belief, not the prompt, and deletes both the mandatory rule and the order text from the departure step. This was chosen over a hybrid for three reasons. It gives clean attribution, so an E4 compliance shift is attributable to authority trust alone rather than to a constant prompt nudge. It holds exact parity between the LLM and rule-based agents, because `rule_based_predeparture` (`agentevac/agents/rule_based_policy.py:58`) delegates to `should_depart_now` and never sees a prompt, so belief is the only channel that reaches both. And it is the strongest answer to the baked-in-compliance critique that motivates the rebuild. The realism cost is contained, because the alert still drives awareness through M2 and still flows to the routing decision through the normal filters. Only the when-to-leave text is removed.
 
-Fallback. If the lived-experience coding later needs the departure reason to cite the order to be codeable against Jason's PADM frame, switch to factual hybrid, meaning a factual non-imperative order line added to the predeparture prompt, held constant across the `theta_auth` sweep so the confound is a fixed offset, never persuasive. Not built now.
+Fallback. If the lived-experience coding later needs the departure reason to cite the order to be codeable against the domain expert's PADM frame, switch to factual hybrid, meaning a factual non-imperative order line added to the predeparture prompt, held constant across the `theta_auth` sweep so the confound is a fixed offset, never persuasive. Not built now.
 
 ## Current state
 

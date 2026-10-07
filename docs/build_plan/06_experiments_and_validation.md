@@ -1,6 +1,6 @@
 # P5. Experiments E0 to E4 and validation
 
-Design source `docs/jason_0611_response_assessment.md` Parts G, I, and the validation gate in I.5. This runs only after M1, C.7, M2, M3, the timeline export, and the Part J metrics are in place.
+Design source, Parts G, I, and the validation gate in I.5 of the private design assessment. This runs only after M1, C.7, M2, M3, the timeline export, and the Part J metrics are in place.
 
 ## The arms as one engine
 

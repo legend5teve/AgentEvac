@@ -1,16 +1,16 @@
 # AgentEvac reconstruction build plan
 
-High-level index for the Halifax reconstruction engineering effort. This turns the domain-expert exchange with Jason into implementable modules. Each work item has its own file in this folder. Read this file first, then the item file for whatever you are about to build.
+High-level index for the Halifax reconstruction engineering effort. This turns the domain-expert exchange into implementable modules. Each work item has its own file in this folder. Read this file first, then the item file for whatever you are about to build.
 
 ## What this is
 
-The exchange in `docs/response-0617.txt` and `docs/QA-0618.txt` asks us to rebuild the experiment around the real 28 May 2023 Upper Tantallon wildfire, with bundled evacuation alerts on the documented timeline, an alert-timing counterfactual, an official-routing counterfactual, and calibration against evacuee movement. The engineering design that decomposes this into modules is `docs/jason_0611_response_assessment.md`, which labels them M0 to M4 and experiment arms E0 to E4. This build plan follows that design, corrected to the current code and to the four decisions locked below.
+The exchange in `docs/response-0617.txt` and `docs/QA-0618.txt` asks us to rebuild the experiment around the real 28 May 2023 Upper Tantallon wildfire, with bundled evacuation alerts on the documented timeline, an alert-timing counterfactual, an official-routing counterfactual, and calibration against evacuee movement. The engineering design that decomposes this into modules is a private design assessment, which labels them M0 to M4 and experiment arms E0 to E4. This build plan follows that design, corrected to the current code and to the four decisions locked below.
 
 Source material to keep open while building.
 
 | Document | Role |
 |---|---|
-| `docs/jason_0611_response_assessment.md` | Master design, module and arm definitions, code touch points |
+| Private design assessment | Master design, module and arm definitions, code touch points |
 | `docs/halifax_reconstruction_inputs.md` | Real-event provenance, alert times, door-to-door, page citations |
 | `docs/halifax_e0_event_timeline.md` | Complete scripted E0 timeline on the ignition-anchored clock |
 | `configs/halifax_3town_e0/` | Built E0 config, re-timed fires with `max_r_m`, alert schedule |

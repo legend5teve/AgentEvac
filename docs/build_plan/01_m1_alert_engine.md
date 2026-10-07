@@ -1,6 +1,6 @@
 # P1a. M1 alert-event engine
 
-Design source `docs/jason_0611_response_assessment.md` Part C. Co-developed with [C.7 belief-only compliance](02_c7_belief_compliance.md). Line numbers are current at time of writing and will drift as code lands, so anchor on the function names.
+Design source, Part C of the private design assessment. Co-developed with [C.7 belief-only compliance](02_c7_belief_compliance.md). Line numbers are current at time of writing and will drift as code lands, so anchor on the function names.
 
 ## Goal
 

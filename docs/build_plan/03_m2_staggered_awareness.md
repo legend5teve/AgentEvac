@@ -1,6 +1,6 @@
 # P2. M2 staggered awareness
 
-Design source `docs/jason_0611_response_assessment.md` Part D. Depends on [M1](01_m1_alert_engine.md) for its primary trigger. This is decision 2, locked to staggered-only, with the awareness-mode flag deferred.
+Design source, Part D of the private design assessment. Depends on [M1](01_m1_alert_engine.md) for its primary trigger. This is decision 2, locked to staggered-only, with the awareness-mode flag deferred.
 
 ## Goal
 
@@ -57,7 +57,7 @@ Either in `main.py` or a small `agentevac/agents/awareness.py`. Checked each dec
 3. Perception crossing. A fire is within `FIRE_PERCEPTION_RANGE_M` of the spawn-edge midpoint, via the existing `_visible_fires`.
 4. Peer message. The inbox is non-empty.
 
-Record `awareness_t_s` and `awareness_source` in `{alert, door_knock, perception, peer}`. The source maps directly onto Jason's source-of-first-warning coding category.
+Record `awareness_t_s` and `awareness_source` in `{alert, door_knock, perception, peer}`. The source maps directly onto the domain expert's source-of-first-warning coding category.
 
 ### Why deferring state creation is safe
 

@@ -1,6 +1,6 @@
 # P4. Metrics, Part J
 
-Design source `docs/jason_0611_response_assessment.md` Part J. Depends on awareness times from [M2](03_m2_staggered_awareness.md) and emergent compliance from [C.7](02_c7_belief_compliance.md). All anchors are in `agentevac/analysis/metrics.py`.
+Design source, Part J of the private design assessment. Depends on awareness times from [M2](03_m2_staggered_awareness.md) and emergent compliance from [C.7](02_c7_belief_compliance.md). All anchors are in `agentevac/analysis/metrics.py`.
 
 ## Goal
 
