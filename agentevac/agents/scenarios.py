@@ -411,3 +411,48 @@ def scenario_system_prompt(mode: str, phase: str) -> str:
         "and personal observations above unverified neighbor messages. "
         "Follow the policy strictly."
     )
+
+
+def scenario_label(mode: str) -> Dict[str, str]:
+    """Return the ``scenario`` block an LLM prompt payload carries for a regime.
+
+    Callers pass the regime the household decides under, the same one that filters its
+    forecast and menu and selects its suffix, so the label agrees with the rest of the
+    prompt.  Built from the run-level setting instead, an ordered household of a no-notice
+    reconstruction run was told that no official warning existed while its payload held
+    the alert-guided forecast.  With no alert schedule the household regime is the
+    run-level one, so the controlled experiments see the same label as before.
+
+    Args:
+        mode: Scenario mode string the household decides under.
+
+    Returns:
+        A dict with ``mode``, ``title`` and ``description``.
+    """
+    cfg = load_scenario_config(mode)
+    return {
+        "mode": cfg["mode"],
+        "title": cfg["title"],
+        "description": cfg["description"],
+    }
+
+
+def scenario_forecast_policy(mode: str, unit: str) -> str:
+    """Return the routing-policy sentence on how to use the official forecast.
+
+    Follows the household regime for the same reason as :func:`scenario_label`, so a
+    household whose payload carries the forecast is told to use it.
+
+    Args:
+        mode: Scenario mode string the household decides under.
+        unit: ``"option"`` or ``"route"``, matching the menu the decision is made over.
+
+    Returns:
+        The sentence, with a trailing space, to embed in the routing policy string.
+    """
+    if load_scenario_config(mode)["forecast_visible"]:
+        return (
+            f"Use forecast.briefing and forecast.route_head to avoid {unit}s that may worsen "
+            "within the forecast horizon. "
+        )
+    return "No official forecast is available in this scenario. "

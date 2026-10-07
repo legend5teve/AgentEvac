@@ -8,6 +8,8 @@ from agentevac.agents.scenarios import (
     filter_history_for_scenario,
     filter_menu_for_scenario,
     load_scenario_config,
+    scenario_forecast_policy,
+    scenario_label,
     scenario_prompt_suffix,
     scenario_system_prompt,
 )
@@ -412,3 +414,70 @@ class TestScenarioPromptSuffix:
     def test_each_mode_has_distinct_suffix(self):
         suffixes = {scenario_prompt_suffix(m) for m in SCENARIO_CHOICES}
         assert len(suffixes) == len(SCENARIO_CHOICES)
+
+
+# The label and forecast sentence the controlled experiments recorded, pinned verbatim so
+# that following the household regime leaves every legacy prompt unchanged.
+_NO_NOTICE_LABEL = {
+    "mode": "no_notice",
+    "title": "No-Notice Wildfire",
+    "description": (
+        "No official warning is available yet. Agents rely on self-observation and neighbor messages."
+    ),
+}
+_USE_FORECAST_OPTION = (
+    "Use forecast.briefing and forecast.route_head to avoid options that may worsen "
+    "within the forecast horizon. "
+)
+_USE_FORECAST_ROUTE = (
+    "Use forecast.briefing and forecast.route_head to avoid routes that may worsen "
+    "within the forecast horizon. "
+)
+_NO_FORECAST = "No official forecast is available in this scenario. "
+
+
+class TestScenarioLabel:
+    def test_matches_config_for_every_mode(self):
+        for mode in SCENARIO_CHOICES:
+            cfg = load_scenario_config(mode)
+            assert scenario_label(mode) == {
+                "mode": cfg["mode"],
+                "title": cfg["title"],
+                "description": cfg["description"],
+            }
+
+    def test_no_notice_label_pinned_verbatim(self):
+        assert scenario_label("no_notice") == _NO_NOTICE_LABEL
+
+    def test_alert_guided_label_reports_the_alert(self):
+        label = scenario_label("alert_guided")
+        assert label["mode"] == "alert_guided"
+        assert "No official warning" not in label["description"]
+
+    def test_neutral_arm_shares_the_advice_guided_label(self):
+        assert scenario_label("advice_guided_neutral") == scenario_label("advice_guided")
+
+
+class TestScenarioForecastPolicy:
+    def test_no_notice_says_no_forecast(self):
+        for unit in ("option", "route"):
+            assert scenario_forecast_policy("no_notice", unit) == _NO_FORECAST
+
+    def test_forecast_modes_pinned_verbatim(self):
+        for mode in ("alert_guided", "advice_guided", "advice_guided_neutral"):
+            assert scenario_forecast_policy(mode, "option") == _USE_FORECAST_OPTION
+            assert scenario_forecast_policy(mode, "route") == _USE_FORECAST_ROUTE
+
+    def test_agrees_with_the_forecast_payload(self):
+        # The defect this guards against: a prompt whose forecast block is filled while
+        # its policy says that no official forecast exists, or the reverse.
+        forecast = {"summary": {"horizon_s": 60.0}, "briefing": "fire spreading north"}
+        for mode in SCENARIO_CHOICES:
+            _, shown = apply_scenario_to_signals(mode, {}, forecast)
+            told_none = scenario_forecast_policy(mode, "option") == _NO_FORECAST
+            assert told_none == (shown.get("available") is False)
+
+    def test_label_agrees_with_suffix(self):
+        for mode in ("no_notice", "alert_guided"):
+            says_no_warning = "No official warning" in scenario_label(mode)["description"]
+            assert says_no_warning == ("no official warnings" in scenario_prompt_suffix(mode))

@@ -96,6 +96,8 @@ from agentevac.agents.scenarios import (
     apply_scenario_to_signals,
     filter_history_for_scenario,
     filter_menu_for_scenario,
+    scenario_forecast_policy,
+    scenario_label,
     scenario_prompt_suffix,
     scenario_system_prompt,
 )
@@ -389,6 +391,28 @@ print(f"[ALERTS] active={ALERT_SCHEDULE_ACTIVE} "
       f"routing_events={_ALERT_ROUTING_EVENTS} tone={SCENARIO_TONE}")
 
 
+def fatal_llm_failure(context: str, veh_id: str, exc: Exception) -> None:
+    """Stop the run when an LLM call fails and strict mode is on.
+
+    A silent fallback produces a finished run with a full metrics file whose agents never
+    reached the language model, which is indistinguishable from a real result. Stopping
+    leaves no metrics file to mistake for one. Inert for the rule-based policy, and
+    disabled by ``LLM_STRICT=0``.
+    """
+    if AGENT_TYPE != "llm" or not LLM_STRICT:
+        return
+    print(f"[FATAL] LLM call failed during {context} for {veh_id}: {exc}")
+    print("[FATAL] Stopping, because a fallback here would write a metrics file that looks "
+          "like a completed llm run. Fix the API access, or set LLM_STRICT=0 to allow the "
+          "behavioural fallback.")
+    sys.stdout.flush()
+    try:
+        traci.close()
+    except Exception:
+        pass
+    os._exit(2)
+
+
 def agent_alert_state(agent_id: str, sim_t_s: float):
     """Resolve the per-agent alert state, or None when no schedule is active (legacy)."""
     if not ALERT_SCHEDULE_ACTIVE:
@@ -513,6 +537,11 @@ if CLI_ARGS.timeline is not None:
     TIMELINE_ENABLED = (CLI_ARGS.timeline == "on")
 TIMELINE_LOG_PATH = CLI_ARGS.timeline_log_path or os.getenv("TIMELINE_LOG_PATH", "outputs/run_timeline.jsonl")
 AGENT_TYPE = (CLI_ARGS.agent_type or os.getenv("AGENT_TYPE", "llm")).lower()
+# A failed LLM call used to fall back to the behavioural model, so a run whose every call
+# failed still finished and wrote a full metrics file that was indistinguishable from a
+# real llm run. Under LLM_STRICT the run stops at the first failure instead. Set it to 0
+# to restore the fallback, for example when transient errors are acceptable.
+LLM_STRICT = _parse_bool(os.getenv("LLM_STRICT", "1"), True)
 SOFTMAX_TAU = float(os.getenv("SOFTMAX_TAU", "1.0"))
 WEB_DASHBOARD_ENABLED = _parse_bool(os.getenv("WEB_DASHBOARD_ENABLED", "0"), False)
 if CLI_ARGS.web_dashboard is not None:
@@ -2989,11 +3018,7 @@ def process_pending_departures(step_idx: int):
                     "system_observation_updates_order": "chronological_oldest_first",
                     "system_observation_updates": prompt_system_observation_updates,
                     "neighborhood_observation": prompt_neighborhood_observation,
-                    "scenario": {
-                        "mode": SCENARIO_CONFIG["mode"],
-                        "title": SCENARIO_CONFIG["title"],
-                        "description": SCENARIO_CONFIG["description"],
-                    },
+                    "scenario": scenario_label(_eff_mode),
                     "forecast": prompt_forecast,
                     "heuristic_departure_signal": {
                         "should_depart": heuristic_should_release,
@@ -3215,6 +3240,7 @@ def process_pending_departures(step_idx: int):
                         error=None,
                     )
                 except Exception as e:
+                    fatal_llm_failure("the predeparture decision", vid, e)
                     llm_predeparture_error = str(e)
                     predeparture_fallback_reason = "heuristic_predeparture_fallback"
                     should_release = _ctx["heuristic_should_release"]
@@ -3554,11 +3580,7 @@ def process_pending_departures(step_idx: int):
                     load_scenario_config(_dep_eff_mode)["tone"],
                     "option",
                 )
-                _fc_pol = (
-                    "Use forecast.briefing and forecast.route_head to avoid options that may worsen within the forecast horizon. "
-                    if SCENARIO_CONFIG["forecast_visible"]
-                    else "No official forecast is available in this scenario. "
-                )
+                _fc_pol = scenario_forecast_policy(_dep_eff_mode, "option")
                 _theta_trust = float(_s_agent.profile["theta_trust"])
                 if _theta_trust == 0.0:
                     _trust_pol = (
@@ -3625,11 +3647,7 @@ def process_pending_departures(step_idx: int):
                         "lambda_e": round(float(_s_agent.profile["lambda_e"]), 4),
                         "lambda_t": round(float(_s_agent.profile["lambda_t"]), 4),
                     },
-                    "scenario": {
-                        "mode": SCENARIO_CONFIG["mode"],
-                        "title": SCENARIO_CONFIG["title"],
-                        "description": SCENARIO_CONFIG["description"],
-                    },
+                    "scenario": scenario_label(_dep_eff_mode),
                     "forecast": _prompt_fc,
                     "fires": [{"x": f["x"], "y": f["y"], "r": round(f["r"], 2)} for f in fires],
                     "destination_menu": _prompt_dest_menu,
@@ -4558,11 +4576,7 @@ def process_vehicles(step_idx: int):
                     ) + route_advisory_policy(
                         route_advisory, load_scenario_config(_eff_mode)["tone"], "option",
                     )
-                    forecast_policy = (
-                        "Use forecast.briefing and forecast.route_head to avoid options that may worsen within the forecast horizon. "
-                        if SCENARIO_CONFIG["forecast_visible"]
-                        else "No official forecast is available in this scenario. "
-                    )
+                    forecast_policy = scenario_forecast_policy(_eff_mode, "option")
                     _theta_trust = float(agent_state.profile["theta_trust"])
                     if _theta_trust == 0.0:
                         trust_policy = (
@@ -4635,11 +4649,7 @@ def process_vehicles(step_idx: int):
                             "lambda_e": round(float(agent_state.profile["lambda_e"]), 4),
                             "lambda_t": round(float(agent_state.profile["lambda_t"]), 4),
                         },
-                        "scenario": {
-                            "mode": SCENARIO_CONFIG["mode"],
-                            "title": SCENARIO_CONFIG["title"],
-                            "description": SCENARIO_CONFIG["description"],
-                        },
+                        "scenario": scenario_label(_eff_mode),
                         "forecast": prompt_forecast,
                         "fires": [{"x": fire_item['x'], "y": fire_item['y'], "r": round(fire_item['r'], 2)} for fire_item in fires],
                         "destination_menu": prompt_destination_menu,
@@ -4878,11 +4888,7 @@ def process_vehicles(step_idx: int):
                     ) + route_advisory_policy(
                         route_advisory, load_scenario_config(_eff_mode)["tone"], "route",
                     )
-                    forecast_policy = (
-                        "Use forecast.briefing and forecast.route_head to avoid routes that may worsen within the forecast horizon. "
-                        if SCENARIO_CONFIG["forecast_visible"]
-                        else "No official forecast is available in this scenario. "
-                    )
+                    forecast_policy = scenario_forecast_policy(_eff_mode, "route")
                     _theta_trust = float(agent_state.profile["theta_trust"])
                     if _theta_trust == 0.0:
                         trust_policy = (
@@ -4955,11 +4961,7 @@ def process_vehicles(step_idx: int):
                             "lambda_e": round(float(agent_state.profile["lambda_e"]), 4),
                             "lambda_t": round(float(agent_state.profile["lambda_t"]), 4),
                         },
-                        "scenario": {
-                            "mode": SCENARIO_CONFIG["mode"],
-                            "title": SCENARIO_CONFIG["title"],
-                            "description": SCENARIO_CONFIG["description"],
-                        },
+                        "scenario": scenario_label(_eff_mode),
                         "forecast": prompt_forecast,
                         "fires": [{"x": fire_item["x"], "y": fire_item["y"], "r": round(fire_item["r"], 2)} for fire_item in fires],
                         "route_menu": prompt_route_menu,
@@ -5107,6 +5109,7 @@ def process_vehicles(step_idx: int):
                             error=None,
                         )
                     except Exception as e:
+                        fatal_llm_failure("a destination decision", vehicle, e)
                         print(f"[WARN] LLM decision failed for {vehicle}: {e}")
                         llm_error = str(e)
                         fallback_reason = "llm_error"
@@ -5418,6 +5421,7 @@ def process_vehicles(step_idx: int):
                     error=None,
                 )
             except Exception as e:
+                fatal_llm_failure("a route decision", _r_vehicle, e)
                 print(f"[WARN] LLM decision failed for {_r_vehicle}: {e}")
                 llm_error = str(e)
                 fallback_reason = "llm_error"
