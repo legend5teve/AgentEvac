@@ -42,7 +42,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -90,13 +90,17 @@ class Cell:
     messaging: str      # on | off
     offset_s: int       # ALERT_TIME_OFFSET_S
     theta_auth: float   # DEFAULT_THETA_AUTH
-    map_name: str = MAP_NAME  # E3 and E2 override this with their own config dir
+    map_name: str = MAP_NAME  # E3, E2 and E5 override this with their own config dir
+    tag: str = ""             # optional suffix on the output subdir, for re-runs
     tone: str = "directive"   # E2 runs neutral so tone is matched across the contrast
 
     @property
     def outdir(self) -> Path:
-        # Grouped under an E0/E1/E4 family folder so outputs/ stays tidy.
-        return REPO / "outputs" / self.arm.upper() / self.subdir / f"{self.agent}_seed{self.seed}"
+        # Grouped under an E0/E1/E4 family folder so outputs/ stays tidy. A tag keeps a
+        # re-run beside the original instead of overwriting it, which the buffer arm needs
+        # because its sizing iterates.
+        sub = f"{self.subdir}__{self.tag}" if self.tag else self.subdir
+        return REPO / "outputs" / self.arm.upper() / sub / f"{self.agent}_seed{self.seed}"
 
     @property
     def name(self) -> str:
@@ -195,11 +199,37 @@ def cell_env(cell: Cell) -> dict:
 
 
 def has_result(cell: Cell) -> bool:
-    return bool(glob.glob(str(cell.outdir / "run_metrics_*.json")))
+    """True when the cell already holds a usable result.
+
+    An llm cell that recorded no API calls does not count, so --skip-existing reruns it
+    once the quota is restored instead of treating the fallback run as done.
+    """
+    if not [f for f in glob.glob(str(cell.outdir / "run_metrics_*.json")) if "profiles" not in f]:
+        return False
+    return not (cell.agent == "llm" and llm_calls_made(cell) == 0)
+
+
+def llm_calls_made(cell: Cell):
+    """Return the API call count an llm cell recorded, or None when unknown.
+
+    An llm run whose every call fails, for example on an exhausted API quota, still
+    completes and writes a full metrics file. Its agents fall back to a non-LLM path, so
+    the cell looks finished and is not an llm result at all. Checking the recorded call
+    count is the only way the driver can tell the difference.
+    """
+    files = [f for f in sorted(glob.glob(str(cell.outdir / "run_metrics_*.json")))
+             if "profiles" not in f]
+    if not files:
+        return None
+    try:
+        return int((json.load(open(files[-1])).get("token_usage") or {}).get("llm_calls", 0))
+    except Exception:
+        return None
 
 
 def read_result(cell: Cell):
-    files = sorted(glob.glob(str(cell.outdir / "run_metrics_*.json")))
+    files = [f for f in sorted(glob.glob(str(cell.outdir / "run_metrics_*.json")))
+             if "profiles" not in f]
     if not files:
         return None
     try:
@@ -259,6 +289,35 @@ def run_cell(cell: Cell, sumo_binary: str):
     return rc, time.time() - t0, m2, tail
 
 
+def api_probe(key: str):
+    """Send the cheapest possible chat call. Returns None when it succeeds, else why not.
+
+    Checks that the key can actually spend, which merely reading it cannot.
+    """
+    import urllib.error
+    import urllib.request
+    body = json.dumps({"model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                       "messages": [{"role": "user", "content": "ok"}],
+                       "max_tokens": 1}).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions", data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            json.loads(resp.read())
+        return None
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = json.loads(exc.read()).get("error", {}).get("message", "")
+        except Exception:
+            pass
+        return f"HTTP {exc.code}. {detail[:160]}"
+    except Exception as exc:
+        return f"{type(exc).__name__}. {exc}"
+
+
 def preflight(cells, dry_run) -> bool:
     ok = True
     # Every map the grid references, since E2 and E3 bring their own config dirs.
@@ -282,9 +341,21 @@ def preflight(cells, dry_run) -> bool:
         if name == E2_MAP and n_routing == 0:
             print(f"  E2 config {name} carries no routing_text, the arm would reproduce E0")
             ok = False
-    if any(c.agent == "llm" for c in cells) and not os.environ.get("OPENAI_API_KEY"):
-        print("  OPENAI_API_KEY not set, the llm cells will fail. Set it or use --agents rule_based.")
-        ok = ok and dry_run
+    if any(c.agent == "llm" for c in cells):
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            print("  OPENAI_API_KEY not set, the llm cells will fail. Set it or use --agents rule_based.")
+            ok = ok and dry_run
+        elif not dry_run:
+            # A key that authenticates is not a key that can spend. An exhausted quota
+            # answers every call with a 429, so without this probe a batch burns hours
+            # producing runs whose agents never reached the model.
+            reason = api_probe(key)
+            if reason:
+                print(f"  OPENAI_API_KEY ...{key[-4:]} cannot complete a call. {reason}")
+                ok = False
+            else:
+                print(f"  OPENAI_API_KEY ...{key[-4:]} answered a one-token probe")
     if not os.environ.get("SUMO_HOME"):
         print(f"  SUMO_HOME not set, defaulting to {DEFAULT_SUMO_HOME}")
     return ok
@@ -299,11 +370,23 @@ def main() -> int:
     ap.add_argument("--continue-on-error", action="store_true", help="Keep going past a failed cell.")
     ap.add_argument("--dry-run", action="store_true", help="Print the plan and exit without running.")
     ap.add_argument("--limit", type=int, default=0, help="Run at most N cells (0 = all). Useful for a test.")
+    ap.add_argument("--tag", default="", help="Suffix the output subdir, so a re-run sits beside the original.")
+    ap.add_argument("--tone", choices=("directive", "neutral"), default="",
+                    help="Override every cell's prompt framing. Use with --tag to keep the runs apart.")
+    ap.add_argument("--messaging", choices=("on", "off"), default="",
+                    help="Keep only the cells with this messaging setting, so that an e0 rerun "
+                         "can leave out the unusable messaging-on cells.")
     args = ap.parse_args()
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     agents = [a.strip() for a in args.agents.split(",") if a.strip()]
     cells = build_cells(arms, agents)
+    if args.tag:
+        cells = [replace(c, tag=args.tag) for c in cells]
+    if args.tone:
+        cells = [replace(c, tone=args.tone) for c in cells]
+    if args.messaging:
+        cells = [c for c in cells if c.messaging == args.messaging]
     if args.limit:
         cells = cells[:args.limit]
     if not cells:
@@ -347,9 +430,17 @@ def main() -> int:
         rc, dt, m2, tail = run_cell(c, args.sumo_binary)
         res = read_result(c)
         status = "ok" if rc == 0 else f"FAIL(rc={rc})"
+        calls = llm_calls_made(c) if c.agent == "llm" else None
+        if status == "ok" and c.agent == "llm" and calls == 0:
+            # The run completed and wrote a full metrics file while every API call failed,
+            # so its agents fell back to a non-LLM path. Treat it as a failure, because it
+            # is indistinguishable from a finished cell in every other respect.
+            status = "FAIL(no llm calls)"
+            rc = rc or 1
         extra = f"  {m2}" if m2 else ""
         depinfo = f"  departed/arrived={res[0]}/{res[1]}" if res else ""
-        print(f"      {status}  {dt/60:.1f} min{depinfo}{extra}")
+        callinfo = f"  llm_calls={calls}" if calls is not None else ""
+        print(f"      {status}  {dt/60:.1f} min{depinfo}{callinfo}{extra}")
         rows.append((c, status, dt, res))
         if rc != 0:
             failed += 1
