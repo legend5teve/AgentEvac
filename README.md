@@ -64,6 +64,33 @@ python -m agentevac.simulation.main --run-mode replay --run-id 20260209_012156
 
 **Key flags:** `--messaging on/off`, `--events on/off`, `--web-dashboard on/off`, `--overlays on/off`, `--metrics on/off`
 
+## Operator Console
+
+A browser console for launching runs, watching them on a map, and authoring new scenario
+packages by drawing on that map instead of hand-editing JSON.
+
+```bash
+# Build the map bundles each package draws before a run exists
+python -m ui.tools.build_map_assets
+
+# Place a package's households in the community the 2023 alerts name, for the
+# "Load record areas" preset in the Author tab
+python -m ui.tools.build_record_areas
+
+# Start the console
+python -m ui.backend
+```
+
+The Author tab draws households, per-building agent counts, fire origins with their growth
+parameters, and alert areas. Each alert area carries its own issue time, wording, and
+colour, so a package can reproduce a multi-wave evacuation order. Areas sharing an issue
+time are written as a single broadcast. Authoring only ever creates a new directory under
+`configs/` and never writes into one that exists, so a package a campaign has already run
+against cannot be altered from the console.
+
+The frontend lives in `ui/frontend/` and is built with `npm run build`. See
+[docs/build_plan/07_config_authoring_ui.md](docs/build_plan/07_config_authoring_ui.md).
+
 ## Docker
 
 ```bash
